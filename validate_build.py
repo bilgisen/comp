@@ -61,7 +61,12 @@ def test_main_app():
         print(f"  ✅ FastAPI app created successfully: {type(app)}")
         
         # Check if routes are registered
-        routes = [route.path for route in app.routes]
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "path"):
+                routes.append(route.path)
+            elif hasattr(route, "path_format"):
+                routes.append(route.path_format)
         expected_routes = ["/health", "/api/v1/companies", "/api/v1/sectors", "/api/v1/admin"]
         
         for expected in expected_routes:
