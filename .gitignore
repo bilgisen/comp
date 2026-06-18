@@ -104,3 +104,6 @@ temelfinansal.xlsx
 *.cert
 *.crt
 *.secret
+
+# Microsoft Word documents
+*.docx
