@@ -26,18 +26,113 @@ async def trigger_manual_fetch(
     """Trigger manual data fetch for specific companies"""
     try:
         results = []
+        from models.company import Company
+        from models.financial import FinancialStatementRaw, FetchLog
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        import json
         
         async with isyatirim_client:
             for ticker in tickers:
-                ticker = ticker.upper()
-                result = await isyatirim_client.fetch_mali_tablo(ticker)
+                ticker = ticker.upper().strip()
+                
+                # Get company metadata to get correct financial_group
+                company = db.query(Company).filter(Company.ticker == ticker).first()
+                if not company:
+                    results.append({
+                        "ticker": ticker,
+                        "success": False,
+                        "error": "Company not found in metadata",
+                        "response_time_ms": 0,
+                        "checksum": None
+                    })
+                    continue
+                
+                financial_group = company.financial_group
+                periods = isyatirim_client._get_periods_to_fetch()
+                
+                # Fetch data from İş Yatırım
+                result = await isyatirim_client.fetch_mali_tablo(
+                    ticker=ticker,
+                    financial_group=financial_group,
+                    periods=periods
+                )
+                
+                rows_inserted = 0
+                if result.success and result.data:
+                    items = result.data.get("value", [])
+                    fetched_at = datetime.utcnow()
+                    insert_values = []
+                    
+                    for item in items:
+                        item_code = item.get("itemCode")
+                        item_desc_tr = item.get("itemDescTr")
+                        item_desc_en = item.get("itemDescEng")
+                        
+                        for idx, (year, period) in enumerate(periods, 1):
+                            val_key = f"value{idx}"
+                            val_str = item.get(val_key)
+                            
+                            if val_str is None:
+                                continue
+                            
+                            try:
+                                # Parse float value from API representation (e.g. "123456" or format string)
+                                val_clean = val_str.strip().replace(".", "").replace(",", ".") if isinstance(val_str, str) else str(val_str)
+                                value_try = float(val_clean) if val_clean else 0.0
+                            except ValueError:
+                                value_try = None
+                            
+                            period_key = f"{year}Q{period//3 if period != 12 else 4}"
+                            
+                            insert_values.append({
+                                "ticker": ticker,
+                                "period_key": period_key,
+                                "year": year,
+                                "period": period,
+                                "financial_group": financial_group,
+                                "item_code": item_code,
+                                "item_desc_tr": item_desc_tr,
+                                "item_desc_en": item_desc_en,
+                                "value_try": value_try,
+                                "fetched_at": fetched_at
+                            })
+                    
+                    if insert_values:
+                        stmt = pg_insert(FinancialStatementRaw).values(insert_values)
+                        stmt = stmt.on_conflict_do_update(
+                            constraint="uq_statements_ticker_period_item",
+                            set_={
+                                "value_try": stmt.excluded.value_try,
+                                "fetched_at": stmt.excluded.fetched_at,
+                                "item_desc_tr": stmt.excluded.item_desc_tr,
+                                "item_desc_en": stmt.excluded.item_desc_en
+                            }
+                        )
+                        db.execute(stmt)
+                        rows_inserted = len(insert_values)
+                    
+                    # Create fetch log entry
+                    log_entry = FetchLog(
+                        ticker=ticker,
+                        period_key=result.period_key,
+                        fetched_at=fetched_at,
+                        http_status=result.http_status,
+                        response_size=len(json.dumps(result.data)),
+                        processing_time_ms=result.response_time_ms,
+                        checksum_md5=result.checksum,
+                        is_new_data=True,
+                        error_message=None
+                    )
+                    db.add(log_entry)
+                    db.commit()
                 
                 results.append({
                     "ticker": ticker,
                     "success": result.success,
                     "error": result.error,
                     "response_time_ms": result.response_time_ms,
-                    "checksum": result.checksum
+                    "checksum": result.checksum,
+                    "rows_inserted": rows_inserted
                 })
         
         return {
@@ -50,7 +145,7 @@ async def trigger_manual_fetch(
         
     except Exception as e:
         logger.error(f"❌ Error in manual fetch: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get("/fetch/status")

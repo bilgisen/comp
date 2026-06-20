@@ -8,9 +8,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, desc, select
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from core.cache import redis_client
 from models.company import Company, CompanyMetrics
 from models.financial import CompanyRatio
@@ -26,7 +27,7 @@ async def get_company_ratios(
     ticker: str,
     period: Optional[str] = Query(None, description="Period key (e.g., '2026Q1')"),
     ratios: Optional[List[str]] = Query(None, description="Specific ratios to return"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Get financial ratios for a company
@@ -35,12 +36,15 @@ async def get_company_ratios(
     """
     ticker = ticker.upper()
     
-    # Check if company exists
-    company = db.query(Company).filter(Company.ticker == ticker).first()
-    if not company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
-    
     try:
+        # Check if company exists
+        company_query = select(Company).where(Company.ticker == ticker)
+        company_result = await db.execute(company_query)
+        company = company_result.scalar_one_or_none()
+        
+        if not company:
+            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+        
         # Check cache first
         cache_key = f"ratios:{ticker}:{period or 'latest'}"
         cached_ratios = await redis_client.get(cache_key)
@@ -49,24 +53,27 @@ async def get_company_ratios(
             return cached_ratios
         
         # Build query
-        query = db.query(CompanyRatio).filter(CompanyRatio.ticker == ticker)
+        query = select(CompanyRatio).where(CompanyRatio.ticker == ticker)
         
         if period:
-            query = query.filter(CompanyRatio.period_key == period)
+            query = query.where(CompanyRatio.period_key == period)
         else:
             # Get latest period
-            latest_period = db.query(CompanyRatio.period_key)\
-                             .filter(CompanyRatio.ticker == ticker)\
+            latest_period_query = select(CompanyRatio.period_key)\
+                             .where(CompanyRatio.ticker == ticker)\
                              .order_by(desc(CompanyRatio.computed_at))\
-                             .first()
+                             .limit(1)
+            latest_period_result = await db.execute(latest_period_query)
+            latest_period = latest_period_result.first()
             if latest_period:
-                query = query.filter(CompanyRatio.period_key == latest_period[0])
+                query = query.where(CompanyRatio.period_key == latest_period[0])
         
         if ratios:
-            query = query.filter(CompanyRatio.ratio_code.in_(ratios))
+            query = query.where(CompanyRatio.ratio_code.in_(ratios))
         
         # Execute query
-        ratio_records = query.order_by(CompanyRatio.ratio_code).all()
+        ratio_records_result = await db.execute(query.order_by(CompanyRatio.ratio_code))
+        ratio_records = ratio_records_result.scalars().all()
         
         if not ratio_records:
             raise HTTPException(
@@ -95,14 +102,16 @@ async def get_company_ratios(
             }
         }
         
+        # Fetch all sector benchmarks for this period to optimize
+        benchmarks_response = await benchmark_service.get_sector_benchmarks(
+            company.sector_main,
+            ratio_records[0].period_key
+        )
+        benchmarks = benchmarks_response.get("benchmarks", {})
+        
         # Process each ratio
         for ratio in ratio_records:
-            # Get sector benchmark
-            benchmark = await benchmark_service.get_benchmark(
-                company.sector_main, 
-                ratio.ratio_code, 
-                ratio.period_key
-            )
+            benchmark = benchmarks.get(ratio.ratio_code)
             
             ratio_data = {
                 "value": float(ratio.ratio_value) if ratio.ratio_value is not None else None,
@@ -115,23 +124,24 @@ async def get_company_ratios(
             
             # Add sector comparison if benchmark available
             if benchmark and ratio.ratio_value is not None:
-                sector_median = benchmark.get("median_equal")
+                sector_median = benchmark.get("median_ew")
                 if sector_median is not None:
                     # Calculate percentile
-                    percentile = await benchmark_service.calculate_percentile(
-                        company.sector_main,
+                    percentile = await benchmark_service.get_company_percentile(
+                        company.ticker,
                         ratio.ratio_code,
-                        ratio.period_key,
-                        float(ratio.ratio_value)
+                        ratio.period_key
                     )
+                    
+                    percentile_value = percentile.get("percentile") if percentile else None
                     
                     ratio_data["sector_comparison"] = {
                         "sector_median": float(sector_median),
-                        "company_percentile": percentile,
+                        "company_percentile": percentile_value,
                         "vs_sector": "above" if float(ratio.ratio_value) > float(sector_median) else "below",
                         "sector_p25": float(benchmark["p25"]) if benchmark.get("p25") else None,
                         "sector_p75": float(benchmark["p75"]) if benchmark.get("p75") else None,
-                        "n_peers": benchmark.get("n_companies", 0),
+                        "n_peers": benchmark.get("n_peers", 0),
                         "reliability": benchmark.get("reliability", "UNKNOWN")
                     }
             
@@ -143,6 +153,8 @@ async def get_company_ratios(
         logger.info(f"✅ Retrieved {len(ratio_records)} ratios for {ticker}")
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error retrieving ratios for {ticker}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -154,7 +166,7 @@ async def compare_company(
     compare_to: str = Query(..., description="'sector' or specific ticker to compare with"),
     metrics: Optional[List[str]] = Query(None, description="Specific metrics to compare"),
     period: Optional[str] = Query(None, description="Period for comparison"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Compare company with sector or another company
@@ -163,12 +175,15 @@ async def compare_company(
     """
     ticker = ticker.upper()
     
-    # Validate company
-    company = db.query(Company).filter(Company.ticker == ticker).first()
-    if not company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
-    
     try:
+        # Validate company
+        company_query = select(Company).where(Company.ticker == ticker)
+        company_result = await db.execute(company_query)
+        company = company_result.scalar_one_or_none()
+        
+        if not company:
+            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+        
         from services.comparison_service import ComparisonService
         
         comparison_service = ComparisonService(db)
@@ -192,6 +207,8 @@ async def compare_company(
         
         return result
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -204,7 +221,7 @@ async def get_company_trends(
     ticker: str,
     ratios: Optional[List[str]] = Query(None, description="Specific ratios to analyze"),
     periods: int = Query(8, description="Number of periods to analyze", ge=2, le=20),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Get trend analysis for company ratios
@@ -213,12 +230,15 @@ async def get_company_trends(
     """
     ticker = ticker.upper()
     
-    # Validate company
-    company = db.query(Company).filter(Company.ticker == ticker).first()
-    if not company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
-    
     try:
+        # Validate company
+        company_query = select(Company).where(Company.ticker == ticker)
+        company_result = await db.execute(company_query)
+        company = company_result.scalar_one_or_none()
+        
+        if not company:
+            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+        
         from services.trend_analysis import TrendAnalysisService
         
         trend_service = TrendAnalysisService(db)
@@ -236,6 +256,8 @@ async def get_company_trends(
             "generated_at": datetime.utcnow().isoformat()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error analyzing trends for {ticker}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -244,7 +266,7 @@ async def get_company_trends(
 @router.get("/{ticker}/profile")
 async def get_company_profile(
     ticker: str,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Get comprehensive company profile
@@ -255,21 +277,28 @@ async def get_company_profile(
     
     try:
         # Get company data
-        company = db.query(Company).filter(Company.ticker == ticker).first()
+        company_query = select(Company).where(Company.ticker == ticker)
+        company_result = await db.execute(company_query)
+        company = company_result.scalar_one_or_none()
+        
         if not company:
             raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
         
         # Get latest metrics
-        metrics = db.query(CompanyMetrics).filter(CompanyMetrics.ticker == ticker).first()
+        metrics_query = select(CompanyMetrics).where(CompanyMetrics.ticker == ticker)
+        metrics_result = await db.execute(metrics_query)
+        metrics = metrics_result.scalar_one_or_none()
         
         # Get key ratios (latest period)
         key_ratios = ["current_ratio", "debt_to_equity", "roe", "net_margin", "pe_ratio"]
-        ratios = db.query(CompanyRatio).filter(
+        ratios_query = select(CompanyRatio).where(
             and_(
                 CompanyRatio.ticker == ticker,
                 CompanyRatio.ratio_code.in_(key_ratios)
             )
-        ).order_by(desc(CompanyRatio.computed_at)).limit(len(key_ratios)).all()
+        ).order_by(desc(CompanyRatio.computed_at)).limit(len(key_ratios))
+        ratios_result = await db.execute(ratios_query)
+        ratios = ratios_result.scalars().all()
         
         # Format response
         result = {
@@ -311,6 +340,8 @@ async def get_company_profile(
         
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error retrieving profile for {ticker}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -362,7 +393,7 @@ async def trigger_ratio_calculation(
                 existing = db.query(CompanyRatio).filter(
                     and_(
                         CompanyRatio.ticker == ticker,
-                        CompanyRatio.period_key == period or latest_period[0],
+                        CompanyRatio.period_key == (period or latest_period[0]),
                         CompanyRatio.ratio_code == result.ratio_code
                     )
                 ).first()
@@ -405,6 +436,8 @@ async def trigger_ratio_calculation(
             "calculated_at": datetime.utcnow().isoformat()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error calculating ratios for {ticker}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
