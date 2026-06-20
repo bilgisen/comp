@@ -313,7 +313,7 @@ async def get_company_profile(
         
     except Exception as e:
         logger.error(f"❌ Error retrieving profile for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.post("/{ticker}/calculate")
