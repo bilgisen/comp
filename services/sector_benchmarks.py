@@ -319,7 +319,7 @@ class SectorBenchmarkService:
         peers: List[Dict[str, Any]], 
         ratio_code: str, 
         sector_main: str,
-        min_periods: int = 3
+        min_periods: int = 1
     ) -> FilterResult:
         """
         Execute F1-F5 filter pipeline for peer validation
