@@ -271,7 +271,7 @@ class TrendAnalysisService:
             return None
             
         return {
-            "company_name": company.company_name,
+            "company_name": company.name,
             "sector_main": company.sector_main,
             "is_active": company.is_active
         }

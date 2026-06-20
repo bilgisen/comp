@@ -408,7 +408,7 @@ class ComparisonService:
         
         return {
             company.ticker: {
-                "company_name": company.company_name,
+                "company_name": company.name,
                 "sector_main": company.sector_main,
                 "market_cap": float(company.market_cap) if company.market_cap else None,
                 "is_active": company.is_active

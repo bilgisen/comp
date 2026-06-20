@@ -63,6 +63,13 @@ class AIContextBuilder:
             cache_ttl: Cache time-to-live in seconds
         """
         try:
+            # Convert string to Enum if necessary
+            if isinstance(context_type, str):
+                try:
+                    context_type = ContextType(context_type)
+                except ValueError:
+                    raise ValueError(f"Geçersiz context_type: {context_type}")
+
             logger.info(f"🤖 Building AI context: {ticker} ({context_type.value})")
             
             # Check cache first
@@ -462,7 +469,7 @@ Bu içerik SPK mevzuatına uygun olarak hazırlanmış olup, yatırım danışma
             
         return {
             "ticker": company.ticker,
-            "company_name": company.company_name,
+            "company_name": company.name,
             "sector_main": company.sector_main,
             "market_cap": float(company.market_cap) if company.market_cap else None,
             "is_active": company.is_active
@@ -524,7 +531,7 @@ Bu içerik SPK mevzuatına uygun olarak hazırlanmış olup, yatırım danışma
         return [
             {
                 "ticker": company.ticker,
-                "company_name": company.company_name,
+                "company_name": company.name,
                 "market_cap": float(company.market_cap) if company.market_cap else None
             }
             for company in companies
@@ -545,7 +552,7 @@ Bu içerik SPK mevzuatına uygun olarak hazırlanmış olup, yatırım danışma
         return [
             {
                 "ticker": company.ticker,
-                "company_name": company.company_name,
+                "company_name": company.name,
                 "market_cap": float(company.market_cap) if company.market_cap else None
             }
             for company in companies
