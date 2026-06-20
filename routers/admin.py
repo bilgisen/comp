@@ -271,7 +271,7 @@ async def calculate_sector_benchmarks(
             "results": [
                 {
                     "ratio_code": r.ratio_code,
-                    "is_sufficient": r.is_sufficient,
+                    "reliability": r.reliability,
                     "median_ew": float(r.median_ew) if r.median_ew is not None else None
                 }
                 for r in results
