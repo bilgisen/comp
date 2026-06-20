@@ -7,9 +7,9 @@ from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database import get_db
+from core.database import get_async_db
 from core.cache import redis_client
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ async def build_ai_context(
     ticker: str,
     context_type: str = Query("comprehensive", description="Context type: 'basic', 'comprehensive', 'comparison'"),
     force_refresh: bool = Query(False, description="Force refresh cached context"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Build AI context for financial analysis chatbot
@@ -65,14 +65,14 @@ async def build_ai_context(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"❌ Error building AI context for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.post("/context/{ticker}/invalidate")
 async def invalidate_ai_context(
     ticker: str,
     context_type: Optional[str] = Query(None, description="Specific context type to invalidate"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """
     Invalidate cached AI context for a company
@@ -100,4 +100,4 @@ async def invalidate_ai_context(
         
     except Exception as e:
         logger.error(f"❌ Error invalidating context for {ticker}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
