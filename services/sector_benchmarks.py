@@ -284,7 +284,12 @@ class SectorBenchmarkService:
                 cr.ticker,
                 cr.ratio_value,
                 c.market_cap,
-                COUNT(*) OVER (PARTITION BY cr.ticker) as available_periods
+                (
+                    SELECT COUNT(*) 
+                    FROM company_ratios cr2 
+                    WHERE cr2.ticker = cr.ticker 
+                      AND cr2.ratio_code = :ratio_code
+                ) as available_periods
             FROM company_ratios cr
             JOIN companies c ON cr.ticker = c.ticker
             WHERE c.sector_main = :sector_main
@@ -302,7 +307,7 @@ class SectorBenchmarkService:
         return [
             {
                 "ticker": row.ticker,
-                "ratio_value": float(row.ratio_value) if row.ratio_value else None,
+                "ratio_value": float(row.ratio_value) if row.ratio_value is not None else None,
                 "market_cap": float(row.market_cap) if row.market_cap else 0,
                 "available_periods": row.available_periods
             }

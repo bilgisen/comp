@@ -47,7 +47,7 @@ async def trigger_manual_fetch(
                     })
                     continue
                 
-                financial_group = company.financial_group
+                financial_group = company.financial_group or "XI_29"
                 periods = isyatirim_client._get_periods_to_fetch()
                 
                 # Fetch data from İş Yatırım
@@ -247,3 +247,36 @@ async def system_health_check(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"❌ Error in health check: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/benchmarks/calculate")
+async def calculate_sector_benchmarks(
+    sector_main: str = Query(..., description="Sector name to calculate"),
+    period_key: str = Query(..., description="Period key (e.g. '2026Q1')"),
+    db: Session = Depends(get_db)
+):
+    """Trigger calculation of sector benchmarks"""
+    try:
+        from services.sector_benchmarks import SectorBenchmarkService
+        from core.database import AsyncSessionLocal
+        
+        async with AsyncSessionLocal() as async_db:
+            service = SectorBenchmarkService(async_db)
+            results = await service.compute_sector_benchmarks(sector_main, period_key)
+            
+        return {
+            "sector": sector_main,
+            "period": period_key,
+            "calculated_benchmarks_count": len(results),
+            "results": [
+                {
+                    "ratio_code": r.ratio_code,
+                    "is_sufficient": r.is_sufficient,
+                    "median_ew": float(r.median_ew) if r.median_ew is not None else None
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        logger.error(f"❌ Error in sector benchmarks manual calculation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

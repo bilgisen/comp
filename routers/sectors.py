@@ -8,8 +8,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
-from core.database import get_db
+from core.database import get_db, get_async_db
 from models.company import Company
 from models.benchmark import SectorBenchmark
 
@@ -19,16 +21,17 @@ router = APIRouter()
 
 
 @router.get("/")
-async def list_sectors(db: Session = Depends(get_db)):
+async def list_sectors(db: AsyncSession = Depends(get_async_db)):
     """List all available sectors with company counts"""
     try:
-        from sqlalchemy import func
-        
-        sectors = db.query(
+        query = select(
             Company.sector_main,
             func.count(Company.id).label("company_count"),
             func.count(Company.id).filter(Company.is_active == True).label("active_companies")
-        ).group_by(Company.sector_main).all()
+        ).group_by(Company.sector_main)
+        
+        result = await db.execute(query)
+        sectors = result.all()
         
         return {
             "sectors": [
@@ -52,7 +55,7 @@ async def get_sector_benchmarks(
     sector: str,
     period: Optional[str] = Query(None, description="Period key"),
     ratios: Optional[List[str]] = Query(None, description="Specific ratios"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get sector benchmark data"""
     try:
@@ -60,8 +63,8 @@ async def get_sector_benchmarks(
         
         benchmark_service = SectorBenchmarkService(db)
         benchmarks = await benchmark_service.get_sector_benchmarks(
-            sector=sector,
-            period=period,
+            sector_main=sector,
+            period_key=period,
             ratio_codes=ratios
         )
         
@@ -81,16 +84,17 @@ async def get_sector_benchmarks(
 async def get_sector_companies(
     sector: str,
     active_only: bool = Query(True, description="Only active companies"),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_async_db)
 ):
     """Get companies in a sector"""
     try:
-        query = db.query(Company).filter(Company.sector_main == sector)
+        query = select(Company).where(Company.sector_main == sector)
         
         if active_only:
-            query = query.filter(Company.is_active == True)
+            query = query.where(Company.is_active == True)
         
-        companies = query.order_by(Company.name).all()
+        result = await db.execute(query.order_by(Company.name))
+        companies = result.scalars().all()
         
         return {
             "sector": sector,
