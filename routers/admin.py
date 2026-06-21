@@ -31,6 +31,12 @@ async def trigger_manual_fetch(
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         import json
         
+        # Support "ALL" keyword to bootstrap all active companies in bulk
+        if tickers and "ALL" in [t.upper().strip() for t in tickers]:
+            active_companies = db.query(Company).filter(Company.is_active == True).all()
+            tickers = [c.ticker for c in active_companies]
+            logger.info(f"🚀 Triggering bulk manual fetch for all {len(tickers)} active companies")
+        
         async with isyatirim_client:
             for ticker in tickers:
                 ticker = ticker.upper().strip()
