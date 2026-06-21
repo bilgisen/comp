@@ -377,14 +377,18 @@ class IsYatirimClient:
                 logger.error(f"Failed to fetch {ticker}: {result.error}")
                 return None
             
-            # For now, always assume new data (diff check would require DB integration)
-            # TODO: Implement actual diff check with database
+            # Return rich response data so scheduler can handle DB operations
             return {
                 "ticker": ticker,
-                "is_new_data": True,  # Simplified - always process for now
+                "is_new_data": True,
                 "checksum": result.checksum,
                 "period_key": result.period_key,
-                "row_count": len(result.data.get("value", [])) if result.data else 0
+                "row_count": len(result.data.get("value", [])) if result.data else 0,
+                "data": result.data,
+                "financial_group": financial_group,
+                "http_status": result.http_status,
+                "response_time_ms": result.response_time_ms,
+                "error": result.error
             }
             
         except Exception as e:

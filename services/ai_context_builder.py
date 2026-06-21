@@ -585,16 +585,33 @@ Bu içerik SPK mevzuatına uygun olarak hazırlanmış olup, yatırım danışma
             "pe_ratio": "F/K Oranı",
             "pb_ratio": "PD/DD Oranı",
             "ev_ebitda": "FD/FAVÖK Oranı",
-            "net_interest_margin": "Net Faiz Marjı"
+            "net_interest_margin": "Net Faiz Marjı",
+            "loan_to_deposit": "Kredi/Mevduat Oranı",
+            "npl_ratio": "Takipteki Kredi Oranı (NPL)",
+            "capital_adequacy": "Sermaye Yeterlilik Oranı (CAR)",
+            "cost_income_ratio": "Maliyet/Gelir Oranı",
+            "loss_ratio": "Hasar Oranı",
+            "expense_ratio": "Gider Oranı",
+            "combined_ratio": "Birleşik Oran",
+            "nav_discount": "Net Aktif Değer (NAD) İskontosu",
+            "rental_yield": "Kira Getirisi"
         }
         return display_names.get(ratio_code, ratio_code.replace("_", " ").title())
 
     def _get_ratio_category(self, ratio_code: str) -> str:
         """Get ratio category"""
         liquidity_ratios = ["current_ratio", "acid_test_ratio", "cash_ratio"]
-        profitability_ratios = ["gross_margin", "ebitda_margin", "net_margin", "roe", "roa"]
+        profitability_ratios = [
+            "gross_margin", "ebitda_margin", "net_margin", "roe", "roa",
+            "loss_ratio", "combined_ratio", "rental_yield"
+        ]
         leverage_ratios = ["debt_ratio", "debt_to_equity", "interest_coverage"]
-        valuation_ratios = ["pe_ratio", "pb_ratio", "ev_ebitda", "price_to_sales"]
+        valuation_ratios = ["pe_ratio", "pb_ratio", "ev_ebitda", "price_to_sales", "nav_discount"]
+        efficiency_ratios = [
+            "asset_turnover", "inventory_turnover", "receivables_turnover", 
+            "expense_ratio", "cost_income_ratio"
+        ]
+        banking_ratios = ["net_interest_margin", "loan_to_deposit", "npl_ratio", "capital_adequacy"]
         
         if ratio_code in liquidity_ratios:
             return "liquidity"
@@ -604,6 +621,10 @@ Bu içerik SPK mevzuatına uygun olarak hazırlanmış olup, yatırım danışma
             return "leverage"
         elif ratio_code in valuation_ratios:
             return "valuation"
+        elif ratio_code in efficiency_ratios:
+            return "efficiency"
+        elif ratio_code in banking_ratios:
+            return "banking"
         else:
             return "other"
 

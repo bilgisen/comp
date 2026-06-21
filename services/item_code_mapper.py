@@ -61,6 +61,14 @@ class ItemCodeMapper:
         "3Z": "total_net_income",               # Toplam net kâr (konsolide)
         "3ZA": "net_income",                    # Ana ortaklık net kârı (MAIN!)
         "3ZB": "minority_net_income",           # Azınlık net kârı
+
+        # INSURANCE-SPECIFIC ITEMS (under UFRS_K/S because KAP uses financial institutions template)
+        "3AA": "net_premium_income",            # Kazanılmış Primler (Reasürör Payı Düşülmüş Olarak)
+        "3BA": "net_claims_incurred",           # Gerçekleşen Hasarlar (Reasürör Payı Düşülmüş Olarak)
+        "3BAA": "claims_paid",                  # Ödenen Hasarlar (Reasürör Payı Düşülmüş Olarak)
+        "3BAB": "outstanding_claims_change",    # Muallak Hasarlar Karşılığı Değişimi
+        "3BD": "operating_expenses",            # Faaliyet Giderleri (Sigorta)
+        "3NJD": "net_income",                   # Dönem Net Kar veya Zararı
     }
     
     # XI_29 (Industrial) mappings - generalized structure

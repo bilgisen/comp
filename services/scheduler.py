@@ -19,7 +19,7 @@ from apscheduler.executors.asyncio import AsyncIOExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from core.database import get_db
+from core.database import get_async_db, get_db
 from services.isyatirim_client import isyatirim_client
 from services.ratio_calculator import RatioCalculator
 
@@ -141,7 +141,7 @@ class SchedulerService:
                 target_companies = tickers
                 scope = f"Companies: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''}"
             elif sector:
-                async with get_db() as db:
+                async with get_async_db() as db:
                     from models.company import Company
                     from sqlalchemy import select
                     
@@ -229,7 +229,7 @@ class SchedulerService:
             self._stats["current_job"] = "Layer 2: Full Scan"
             logger.info("🌊 Layer 2: Starting weekly full scan (safety net)")
             
-            async with get_db() as db:
+            async with get_async_db() as db:
                 from models.company import Company
                 from sqlalchemy import select
                 
@@ -292,7 +292,7 @@ class SchedulerService:
         
         # For now, return all active companies during reporting windows
         # TODO: Implement more sophisticated logic based on company-specific patterns
-        async with get_db() as db:
+        async with get_async_db() as db:
             from models.company import Company
             from sqlalchemy import select
             
@@ -372,35 +372,142 @@ class SchedulerService:
         }
 
     async def _fetch_single_company(self, ticker: str, priority: bool = False) -> Optional[Dict[str, Any]]:
-        """Fetch mali tablo data for a single company with diff checking"""
+        """Fetch mali tablo data for a single company with diff checking and DB persistence"""
         try:
             # Get current period parameters
             periods = self._get_current_periods()
             
-            # Fetch with diff check
+            # Fetch with diff check (includes raw data)
             result = await isyatirim_client.fetch_with_diff_check(
                 ticker, 
                 periods,
                 priority=priority
             )
             
-            if result and result.get("is_new_data"):
-                # Trigger ratio calculation asynchronously
-                asyncio.create_task(self._trigger_ratio_calculation(ticker))
+            if not result or "data" not in result:
+                return result
+                
+            # Perform DB operations with diff optimization
+            from models.financial import FetchLog, FinancialStatementRaw
+            from sqlalchemy import select, and_
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            import json
+            
+            ticker = ticker.upper().strip()
+            period_key = result["period_key"]
+            new_checksum = result["checksum"]
+            financial_group = result["financial_group"]
+            
+            async with get_async_db() as db:
+                # Find last checksum in database
+                stmt = select(FetchLog.checksum_md5).where(
+                    and_(
+                        FetchLog.ticker == ticker,
+                        FetchLog.period_key == period_key
+                    )
+                ).order_by(FetchLog.fetched_at.desc()).limit(1)
+                
+                db_res = await db.execute(stmt)
+                last_checksum = db_res.scalar_one_or_none()
+                
+                # Check if data is actually new
+                is_new = (last_checksum is None) or (last_checksum != new_checksum)
+                result["is_new_data"] = is_new
+                
+                fetched_at = datetime.utcnow()
+                
+                if is_new:
+                    logger.info(f"✨ New financial data detected for {ticker} (Checksum: {new_checksum})")
+                    items = result["data"].get("value", [])
+                    insert_values = []
+                    
+                    # Map year and period tuples from periods list
+                    periods_tuples = [(p["year"], p["period"]) for p in periods]
+                    
+                    for item in items:
+                        item_code = item.get("itemCode")
+                        item_desc_tr = item.get("itemDescTr")
+                        item_desc_en = item.get("itemDescEng")
+                        
+                        for idx, (year, period) in enumerate(periods_tuples, 1):
+                            val_key = f"value{idx}"
+                            val_str = item.get(val_key)
+                            
+                            if val_str is None:
+                                continue
+                            
+                            try:
+                                # Parse float value from API representation (e.g. "123456" or format string)
+                                val_clean = val_str.strip().replace(".", "").replace(",", ".") if isinstance(val_str, str) else str(val_str)
+                                value_try = float(val_clean) if val_clean else 0.0
+                            except ValueError:
+                                value_try = None
+                            
+                            p_key = f"{year}Q{period//3 if period != 12 else 4}"
+                            
+                            insert_values.append({
+                                "ticker": ticker,
+                                "period_key": p_key,
+                                "year": year,
+                                "period": period,
+                                "financial_group": financial_group,
+                                "item_code": item_code,
+                                "item_desc_tr": item_desc_tr,
+                                "item_desc_en": item_desc_en,
+                                "value_try": value_try,
+                                "fetched_at": fetched_at
+                            })
+                    
+                    if insert_values:
+                        stmt_upsert = pg_insert(FinancialStatementRaw).values(insert_values)
+                        stmt_upsert = stmt_upsert.on_conflict_do_update(
+                            constraint="uq_statements_ticker_period_item",
+                            set_={
+                                "value_try": stmt_upsert.excluded.value_try,
+                                "fetched_at": stmt_upsert.excluded.fetched_at,
+                                "item_desc_tr": stmt_upsert.excluded.item_desc_tr,
+                                "item_desc_en": stmt_upsert.excluded.item_desc_en
+                            }
+                        )
+                        await db.execute(stmt_upsert)
+                        logger.debug(f"💾 Persisted {len(insert_values)} statement entries for {ticker}")
+                
+                else:
+                    logger.debug(f"😴 Checksum matches ({new_checksum}). Skipping persistence for {ticker}")
+                
+                # Always create a FetchLog entry to document the check
+                log_entry = FetchLog(
+                    ticker=ticker,
+                    period_key=period_key,
+                    fetched_at=fetched_at,
+                    http_status=result.get("http_status"),
+                    response_size=len(json.dumps(result["data"])) if result.get("data") else 0,
+                    processing_time_ms=result.get("response_time_ms"),
+                    checksum_md5=new_checksum,
+                    is_new_data=is_new,
+                    error_message=result.get("error")
+                )
+                db.add(log_entry)
+                await db.commit()
+            
+            # Asynchronously trigger ratio calculations ONLY if data is new!
+            if result.get("is_new_data"):
+                asyncio.create_task(self._trigger_ratio_calculation(ticker, result["period_key"]))
                 
             return result
             
         except Exception as e:
-            logger.error(f"Failed to fetch {ticker}: {e}")
+            logger.error(f"Failed to fetch {ticker}: {e}", exc_info=True)
             return None
 
-    async def _trigger_ratio_calculation(self, ticker: str):
-        """Trigger ratio calculation for updated company data"""
+    async def _trigger_ratio_calculation(self, ticker: str, period_key: str):
+        """Trigger ratio calculation for updated company data using sync SessionLocal"""
         try:
-            async with get_db() as db:
+            from core.database import SessionLocal
+            with SessionLocal() as db:
                 calculator = RatioCalculator(db)
-                await calculator.calculate_company_ratios(ticker)
-                logger.debug(f"✅ Ratios calculated: {ticker}")
+                await calculator.calculate_company_ratios(ticker, period_key)
+                logger.debug(f"✅ Ratios calculated: {ticker} {period_key}")
         except Exception as e:
             logger.error(f"Ratio calculation failed for {ticker}: {e}")
 

@@ -26,7 +26,7 @@ class Company(Base):
     
     # Financial metadata
     financial_group = Column(String(20), nullable=False, index=True)  # UFRS_K, XI_29, etc.
-    market_cap = Column(BigInteger, nullable=True)       # Güncel piyasa değeri (TRY)
+    market_cap = Column(BigInteger, nullable=True)       # Güncel piyasa değeri (TL)
     
     # Company details
     city = Column(String(50), nullable=True)
@@ -76,4 +76,4 @@ class CompanyMetrics(Base):
     price_updated_at = Column(DateTime(timezone=True), nullable=True)
     
     def __repr__(self):
-        return f"<CompanyMetrics {self.ticker}: {self.last_price} TRY>"
+        return f"<CompanyMetrics {self.ticker}: {self.last_price} TL>"
