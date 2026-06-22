@@ -395,12 +395,34 @@ class RatioCalculator:
             
             # Group by year and period and map item codes to semantic names
             periods_data = {}
+            is_consolidated = any(stmt.item_code == "1BL" for stmt in statements)
+            
             for stmt in statements:
                 key = (stmt.year, stmt.period)
                 if key not in periods_data:
                     periods_data[key] = {}
                 
-                semantic_name = mapper.get_semantic_name(stmt.item_code, financial_group)
+                # Check for consolidated overrides
+                semantic_name = None
+                if is_consolidated and financial_group not in ["UFRS_K", "UFRS_F", "UFRS_S"]:
+                    if stmt.item_code == "1BL":
+                        semantic_name = "total_assets"
+                    elif stmt.item_code == "2ODB":
+                        semantic_name = "total_liabilities_equity"
+                    elif stmt.item_code == "2O":
+                        semantic_name = "shareholders_equity"
+                    elif stmt.item_code == "3CA":
+                        semantic_name = "revenue"
+                    elif stmt.item_code == "3C":
+                        semantic_name = "cost_of_goods_sold"
+                    elif stmt.item_code == "3CAB":
+                        semantic_name = "gross_profit"
+                    elif stmt.item_code == "1AF":
+                        semantic_name = "inventories"
+                
+                if not semantic_name:
+                    semantic_name = mapper.get_semantic_name(stmt.item_code, financial_group)
+                
                 if semantic_name and stmt.value_try is not None:
                     periods_data[key][semantic_name] = float(stmt.value_try)
             
