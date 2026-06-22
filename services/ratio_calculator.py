@@ -377,6 +377,7 @@ class RatioCalculator:
         """
         try:
             from services.item_code_mapper import ItemCodeMapper
+            from sqlalchemy import Tuple
             
             mapper = ItemCodeMapper(self.db)
             
@@ -392,15 +393,54 @@ class RatioCalculator:
                 logger.warning(f"No statements found for {ticker}")
                 return None
             
-            # Map item codes to semantic names
-            financial_data = {}
+            # Group by year and period and map item codes to semantic names
+            periods_data = {}
+            for stmt in statements:
+                key = (stmt.year, stmt.period)
+                if key not in periods_data:
+                    periods_data[key] = {}
+                
+                semantic_name = mapper.get_semantic_name(stmt.item_code, financial_group)
+                if semantic_name and stmt.value_try is not None:
+                    periods_data[key][semantic_name] = float(stmt.value_try)
             
+            # Derive missing financial metrics for each period
+            for key, p_data in periods_data.items():
+                if financial_group not in ["UFRS_K", "UFRS_F", "UFRS_S"]:
+                    # Industrial/General companies (XI_29)
+                    
+                    # 1. total_liabilities (fallback to assets - equity)
+                    if "total_assets" in p_data and "shareholders_equity" in p_data:
+                        p_data["total_liabilities"] = p_data.get("total_liabilities", p_data["total_assets"] - p_data["shareholders_equity"])
+                    else:
+                        p_data["total_liabilities"] = p_data.get("total_liabilities", p_data.get("current_liabilities", 0) + p_data.get("non_current_liabilities", 0))
+                    
+                    # 2. total_debt (short_term_borrowings + long_term_borrowings)
+                    p_data["total_debt"] = p_data.get("total_debt", p_data.get("short_term_borrowings", 0) + p_data.get("long_term_borrowings", 0))
+                    
+                    # 3. net_debt (total_debt - cash_and_equivalents)
+                    p_data["net_debt"] = p_data.get("net_debt", p_data["total_debt"] - p_data.get("cash_and_equivalents", 0))
+                    
+                    # 4. ebitda (fallback to operating_income)
+                    p_data["ebitda"] = p_data.get("ebitda", p_data.get("operating_income", 0))
+                    
+                    # 5. inventories fallback (some templates might map inventories under 1AF or 1AD)
+                    if "inventories" not in p_data and "1AF" in p_data:
+                        p_data["inventories"] = p_data["1AF"]
+            
+            # Find the target period in our grouped data
+            target_key = None
+            for s in statements:
+                if s.period_key == period_key:
+                    target_key = (s.year, s.period)
+                    break
+            
+            if not target_key:
+                logger.warning(f"Target period_key {period_key} not found in statements for {ticker}")
+                return None
+                
             # Current period (instant values)
-            current_statements = [s for s in statements if s.period_key == period_key]
-            for statement in current_statements:
-                semantic_name = mapper.get_semantic_name(statement.item_code, financial_group)
-                if semantic_name and statement.value_try is not None:
-                    financial_data[semantic_name] = float(statement.value_try)
+            financial_data = periods_data.get(target_key, {}).copy()
             
             # TTM calculation for income statement items
             if financial_group in ["UFRS_K", "UFRS_F", "UFRS_S"]:
@@ -416,11 +456,11 @@ class RatioCalculator:
                                 if statement.value_try is not None:
                                     financial_data[ttm_name] = float(statement.value_try)
             else:
-                # Other sectors report quarterly - sum last 4 quarters
-                financial_data.update(self._calculate_ttm_values(statements, mapper, financial_group))
+                # Other sectors report quarterly - sum last 4 quarters from pre-derived periods_data
+                financial_data.update(self._calculate_ttm_values(periods_data))
             
-            # Calculate average values for certain ratios
-            financial_data.update(self._calculate_average_values(statements, mapper, financial_group))
+            # Calculate average values for certain ratios from pre-derived periods_data
+            financial_data.update(self._calculate_average_values(periods_data))
             
             # Add market cap (from company metrics or company table)
             market_cap = None
@@ -445,23 +485,10 @@ class RatioCalculator:
     
     def _calculate_ttm_values(
         self, 
-        statements: List[FinancialStatementRaw],
-        mapper: "ItemCodeMapper", 
-        financial_group: str
+        periods_data: dict
     ) -> Dict[str, float]:
         """Calculate TTM values for income statement items (XI_29 only)"""
         ttm_data = {}
-        
-        # Group by year and period 
-        periods_data = {}
-        for stmt in statements:
-            key = (stmt.year, stmt.period)
-            if key not in periods_data:
-                periods_data[key] = {}
-            
-            semantic_name = mapper.get_semantic_name(stmt.item_code, financial_group)
-            if semantic_name and stmt.value_try is not None:
-                periods_data[key][semantic_name] = float(stmt.value_try)
         
         # Get last 4 quarters
         sorted_periods = sorted(periods_data.keys(), reverse=True)
@@ -489,23 +516,10 @@ class RatioCalculator:
     
     def _calculate_average_values(
         self, 
-        statements: List[FinancialStatementRaw],
-        mapper: "ItemCodeMapper",
-        financial_group: str
+        periods_data: dict
     ) -> Dict[str, float]:
         """Calculate average values (e.g., for ROE, ROA calculations)"""
         avg_data = {}
-        
-        # Get current and previous period balance sheet values
-        periods_data = {}
-        for stmt in statements:
-            key = (stmt.year, stmt.period)
-            if key not in periods_data:
-                periods_data[key] = {}
-            
-            semantic_name = mapper.get_semantic_name(stmt.item_code, financial_group)
-            if semantic_name and stmt.value_try is not None:
-                periods_data[key][semantic_name] = float(stmt.value_try)
         
         sorted_periods = sorted(periods_data.keys(), reverse=True)
         if len(sorted_periods) >= 2:

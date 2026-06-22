@@ -81,6 +81,7 @@ class ItemCodeMapper:
         "1AC": "accounts_receivable",
         "1AD": "inventories",
         "1AE": "other_current_assets",
+        "1AF": "inventories",
         "1B": "non_current_assets",
         "1BA": "financial_investments_non_current",
         "1BB": "property_plant_equipment",

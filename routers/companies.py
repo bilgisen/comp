@@ -14,12 +14,39 @@ from sqlalchemy import and_, desc, select
 from core.database import get_db, get_async_db
 from core.cache import redis_client
 from models.company import Company, CompanyMetrics
-from models.financial import CompanyRatio
+from models.financial import CompanyRatio, FinancialStatementRaw
 from services.ratio_calculator import RatioCalculator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/{ticker}/statements")
+async def get_company_statements(
+    ticker: str,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Diagnostic endpoint to get distinct raw statement items for a company
+    """
+    ticker = ticker.upper()
+    try:
+        query = select(FinancialStatementRaw).where(FinancialStatementRaw.ticker == ticker).order_by(FinancialStatementRaw.year.desc(), FinancialStatementRaw.period.desc()).limit(100)
+        result = await db.execute(query)
+        statements = result.scalars().all()
+        return [
+            {
+                "item_code": s.item_code,
+                "item_desc_tr": s.item_desc_tr,
+                "value_try": s.value_try,
+                "period_key": s.period_key
+            }
+            for s in statements
+        ]
+    except Exception as e:
+        logger.error(f"Error in diagnostic endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{ticker}/ratios")
