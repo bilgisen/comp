@@ -411,9 +411,9 @@ class RatioCalculator:
                         semantic_name = "total_liabilities_equity"
                     elif stmt.item_code == "2O":
                         semantic_name = "shareholders_equity"
-                    elif stmt.item_code == "3CA":
-                        semantic_name = "revenue"
                     elif stmt.item_code == "3C":
+                        semantic_name = "revenue"
+                    elif stmt.item_code == "3CA":
                         semantic_name = "cost_of_goods_sold"
                     elif stmt.item_code == "3CAB":
                         semantic_name = "gross_profit"

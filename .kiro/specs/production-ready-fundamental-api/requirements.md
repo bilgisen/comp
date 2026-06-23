@@ -1,4 +1,4 @@
-# Requirements Document: Production-Ready Fundamental Analysis API
+# Requirements Document
 
 ## Introduction
 
