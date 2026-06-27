@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     
     # Database (PostgreSQL)
     DATABASE_URL: Optional[str] = Field(default=None, validation_alias="DATABASE_URL")
+    OVH_DATABASE_URL: Optional[str] = Field(default=None, validation_alias="OVH_DATABASE_URL")
+    OVH_SSL_CERT: Optional[str] = Field(default=None, validation_alias="OVH_SSL_CERT")
     DB_HOST: str = Field(default="localhost", validation_alias="DB_HOST")
     DB_PORT: int = Field(default=5432, validation_alias="DB_PORT") 
     DB_USER: str = Field(default="postgres", validation_alias="DB_USER")
@@ -72,6 +74,10 @@ class Settings(BaseSettings):
     # Monitoring
     ENABLE_METRICS: bool = Field(default=True, validation_alias="ENABLE_METRICS") 
     SENTRY_DSN: Optional[str] = Field(default=None, validation_alias="SENTRY_DSN")
+    
+    # Celery (Background Tasks)
+    CELERY_BROKER_URL: Optional[str] = Field(default=None, validation_alias="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, validation_alias="CELERY_RESULT_BACKEND")
     
     # AI Integration
     GEMINI_API_KEY: Optional[str] = Field(default=None, validation_alias="GEMINI_API_KEY")

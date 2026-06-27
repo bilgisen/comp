@@ -82,10 +82,21 @@ async def trigger_manual_fetch(
                                 continue
                             
                             try:
-                                # Parse float value from API representation (e.g. "123456" or format string)
-                                val_clean = val_str.strip().replace(".", "").replace(",", ".") if isinstance(val_str, str) else str(val_str)
-                                value_try = float(val_clean) if val_clean else 0.0
-                            except ValueError:
+                                # Parse value - API returns plain number strings (no formatting)
+                                # e.g., "566760333000" or "0" or sometimes with decimals
+                                if isinstance(val_str, str):
+                                    val_str = val_str.strip()
+                                    if not val_str or val_str == "":
+                                        value_try = None
+                                    else:
+                                        # Remove thousand separators if any, replace comma with dot for decimals
+                                        val_clean = val_str.replace(".", "").replace(",", ".")
+                                        value_try = float(val_clean)
+                                elif isinstance(val_str, (int, float)):
+                                    value_try = float(val_str)
+                                else:
+                                    value_try = None
+                            except (ValueError, AttributeError):
                                 value_try = None
                             
                             period_key = f"{year}Q{period//3 if period != 12 else 4}"
