@@ -74,52 +74,49 @@ class ItemCodeMapper:
     # XI_29 (Industrial) mappings - generalized structure
     XI_29_MAPPINGS = {
         # BALANCE SHEET - ASSETS (1X codes)
-        "1Z": "total_assets",
-        "1A": "current_assets",
-        "1AA": "cash_and_equivalents",
-        "1AB": "financial_investments_current",
-        "1AC": "accounts_receivable",
-        "1AD": "inventories",
-        "1AE": "other_current_assets",
-        "1AF": "inventories",
-        "1B": "non_current_assets",
-        "1BA": "financial_investments_non_current",
-        "1BB": "property_plant_equipment",
-        "1BC": "intangible_assets",
-        "1BD": "goodwill",
-        "1BE": "other_non_current_assets",
+        "1BL": "total_assets",           # TOPLAM VARLIKLAR
+        "1A": "current_assets",          # Dönen Varlıklar
+        "1AA": "cash_and_equivalents",   # Nakit ve Nakit Benzerleri
+        "1AB": "financial_investments_current",  # Finansal Yatırımlar
+        "1AC": "accounts_receivable",    # Ticari Alacaklar
+        "1AD": "other_receivables",      # Finans Sektörü Faaliyetlerinden Alacaklar
+        "1AF": "inventories",            # Stoklar
+        "1AK": "non_current_assets",     # Duran Varlıklar
+        "1BG": "property_plant_equipment",  # Maddi Duran Varlıklar
+        "1BH": "intangible_assets",      # Maddi Olmayan Duran Varlıklar
+        "1BGA": "goodwill",              # Şerefiye
         
         # BALANCE SHEET - LIABILITIES (2X codes)
-        "2Z": "total_liabilities_equity",
-        "2A": "current_liabilities", 
-        "2AA": "short_term_borrowings",
-        "2AB": "accounts_payable",
-        "2AC": "accrued_expenses",
-        "2AD": "other_current_liabilities",
-        "2B": "non_current_liabilities",
-        "2BA": "long_term_borrowings",
-        "2BB": "provisions",
-        "2BC": "other_non_current_liabilities",
-        "2O": "shareholders_equity",
-        "2OA": "paid_in_capital",
-        "2OB": "retained_earnings",
-        "2OC": "other_equity",
+        "2ODB": "total_liabilities_equity",  # TOPLAM KAYNAKLAR
+        "2A": "current_liabilities",     # Kısa Vadeli Yükümlülükler
+        "2AA": "short_term_borrowings",  # Finansal Borçlar (Kısa Vadeli)
+        "2AAGAA": "accounts_payable",    # Ticari Borçlar
+        "2B": "non_current_liabilities", # Uzun Vadeli Yükümlülükler
+        "2BA": "long_term_borrowings",   # Finansal Borçlar (Uzun Vadeli)
+        "2N": "shareholders_equity",     # Özkaynaklar
+        "2O": "shareholders_equity",     # Ana Ortaklığa Ait Özkaynaklar (also shareholders_equity)
+        "2OA": "paid_in_capital",        # Ödenmiş Sermaye
+        "2OCF": "retained_earnings",     # Dönem Net Kar/Zararı
+        "2OCE": "retained_earnings",     # Geçmiş Yıllar Kar/Zararları
         
         # INCOME STATEMENT (3X codes)
-        "3Z": "net_income",
-        "3A": "revenue",
-        "3B": "cost_of_goods_sold",
-        "3C": "gross_profit",
-        "3D": "operating_expenses",
-        "3DA": "selling_expenses",
-        "3DB": "administrative_expenses",
-        "3DC": "research_development",
-        "3E": "operating_income",
-        "3F": "financial_income",
-        "3G": "financial_expense",
-        "3H": "profit_before_tax",
-        "3I": "tax_expense",
-        "3J": "profit_after_tax",
+        "3C": "revenue",                 # Satış Gelirleri
+        "3CA": "cost_of_goods_sold",     # Satışların Maliyeti
+        "3CAB": "gross_profit",          # Ticari Faaliyetlerden Brüt Kar
+        "3D": "gross_profit",            # BRÜT KAR (ZARAR)
+        "3DF": "operating_income",       # FAALİYET KARI (ZARARI)
+        "3H": "operating_income",        # Net Faaliyet Kar/Zararı
+        "3HB": "financial_income",       # Finansal Gelirler
+        "3HC": "financial_expense",      # Finansal Giderler
+        "3I": "profit_before_tax",       # Vergi Öncesi Kar
+        "3J": "net_income_continuing",   # Sürdürülen Faaliyetler Dönem Karı
+        "3L": "net_income",              # DÖNEM KARI (ZARARI)
+        "3Z": "net_income",              # Ana Ortaklık Payları (net income to shareholders)
+        
+        # CASH FLOW STATEMENT (4X codes)
+        "4C": "operating_cash_flow",     # İşletme Faaliyetlerinden Nakit
+        "4CAB": "depreciation_amortization",  # Amortisman & İtfa Payları
+        "4CB": "free_cash_flow",         # Serbest Nakit Akım
     }
     
     # Mapping configurations by financial group
@@ -187,31 +184,50 @@ class ItemCodeMapper:
         description: Optional[str] = None
     ):
         """Save a mapping to database"""
-        existing = self.db.query(ItemCodeMapping).filter(
-            and_(
-                ItemCodeMapping.financial_group == financial_group,
-                ItemCodeMapping.item_code == item_code
-            )
-        ).first()
-        
-        if existing:
-            existing.semantic_name = semantic_name
-            if description:
-                existing.description_tr = description
-        else:
-            mapping = ItemCodeMapping(
-                financial_group=financial_group,
-                item_code=item_code,
-                semantic_name=semantic_name,
-                description_tr=description or f"Auto-mapped: {item_code}",
-                statement_type=self._classify_statement_type(item_code),
-                category=self._classify_category(item_code, semantic_name),
-                is_primary=True,
-                priority=1000
-            )
-            self.db.add(mapping)
-        
-        self.db.commit()
+        try:
+            # Check if this item_code already exists
+            existing = self.db.query(ItemCodeMapping).filter(
+                and_(
+                    ItemCodeMapping.financial_group == financial_group,
+                    ItemCodeMapping.item_code == item_code
+                )
+            ).first()
+            
+            if existing:
+                existing.semantic_name = semantic_name
+                if description:
+                    existing.description_tr = description
+            else:
+                # Check if semantic_name already exists for this financial_group
+                # If so, skip to avoid duplicate key error
+                existing_semantic = self.db.query(ItemCodeMapping).filter(
+                    and_(
+                        ItemCodeMapping.financial_group == financial_group,
+                        ItemCodeMapping.semantic_name == semantic_name
+                    )
+                ).first()
+                
+                if existing_semantic:
+                    # Skip - don't create duplicate semantic names
+                    logger.debug(f"Semantic name '{semantic_name}' already exists for {financial_group}, skipping {item_code}")
+                    return
+                
+                mapping = ItemCodeMapping(
+                    financial_group=financial_group,
+                    item_code=item_code,
+                    semantic_name=semantic_name,
+                    description_tr=description or f"Auto-mapped: {item_code}",
+                    statement_type=self._classify_statement_type(item_code),
+                    category=self._classify_category(item_code, semantic_name),
+                    is_primary=True,
+                    priority=1000
+                )
+                self.db.add(mapping)
+            
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            logger.warning(f"Failed to save mapping {item_code}->{semantic_name}: {e}")
     
     def _classify_statement_type(self, item_code: str) -> str:
         """Classify statement type based on item code"""
