@@ -178,18 +178,44 @@ class TieredAnalysisResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_user_tier(authorization: Optional[str]) -> UserTier:
-    """Determine user tier from authorization header"""
+    """Determine user tier from authorization header
+    
+    Supports multiple formats:
+    - Bearer subscriber_token (legacy)
+    - Bearer member_token (legacy)  
+    - Bearer <jwt_token> with X-User-Tier header
+    - Direct tier header: X-User-Tier: pro/ultimate/standard/free
+    """
     if not authorization:
         return UserTier.ANONYMOUS
     
-    # TODO: Integrate with actual auth system
-    # For now, use simple token check
-    if authorization.startswith("Bearer subscriber_"):
+    # Check for explicit tier header (from Hono orchestrator)
+    # This is set by the frontend via Hono proxy
+    
+    # Legacy token format check
+    if "subscriber_" in authorization or "ultimate" in authorization or "pro" in authorization:
         return UserTier.SUBSCRIBER
-    elif authorization.startswith("Bearer member_"):
+    elif "member_" in authorization or "standard" in authorization or "free" in authorization:
         return UserTier.MEMBER
     
     return UserTier.ANONYMOUS
+
+
+def get_user_tier_from_headers(authorization: Optional[str], user_tier_header: Optional[str] = None) -> UserTier:
+    """Get user tier from headers - supports both auth token and explicit tier header"""
+    
+    # Priority 1: Explicit tier header from orchestrator
+    if user_tier_header:
+        tier_map = {
+            "ultimate": UserTier.SUBSCRIBER,
+            "pro": UserTier.SUBSCRIBER,
+            "standard": UserTier.MEMBER,
+            "free": UserTier.MEMBER,
+        }
+        return tier_map.get(user_tier_header.lower(), UserTier.ANONYMOUS)
+    
+    # Priority 2: Auth token parsing
+    return get_user_tier(authorization)
 
 
 def calculate_percentile(value: float, peer_values: List[float]) -> int:
@@ -565,6 +591,7 @@ async def get_tiered_analysis(
     ticker: str,
     period_key: Optional[str] = Query(None, description="Period key (default: latest)"),
     authorization: Optional[str] = Header(None),
+    x_user_tier: Optional[str] = Header(None, alias="X-User-Tier"),
     db: Session = Depends(get_db),
 ):
     """
@@ -574,10 +601,14 @@ async def get_tiered_analysis(
     - Anonymous: Score card + basic ratio cards
     - Member: Enhanced cards + 1-paragraph summary
     - Subscriber: Ultimate cards + detailed report + SWOT
+    
+    Headers:
+    - Authorization: Bearer token (legacy support)
+    - X-User-Tier: Explicit tier from orchestrator (pro, ultimate, standard, free)
     """
     
-    # Determine user tier
-    tier = get_user_tier(authorization)
+    # Determine user tier from headers
+    tier = get_user_tier_from_headers(authorization, x_user_tier)
     
     # Get company info
     company = db.execute(text("""
@@ -667,17 +698,20 @@ async def get_swot_analysis(
     ticker: str,
     period_key: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
+    x_user_tier: Optional[str] = Header(None, alias="X-User-Tier"),
     db: Session = Depends(get_db),
 ):
     """
     Get SWOT analysis for a company (subscriber only).
+    
+    Requires Pro or Ultimate subscription.
     """
-    tier = get_user_tier(authorization)
+    tier = get_user_tier_from_headers(authorization, x_user_tier)
     
     if tier != UserTier.SUBSCRIBER:
         raise HTTPException(
             status_code=403,
-            detail="SWOT analysis is available for subscribers only"
+            detail="SWOT analizi Pro ve Ultimate aboneleri için özeldir."
         )
     
     if not period_key:
