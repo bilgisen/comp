@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from core.config import settings
 from core.database import get_db, init_db
-from routers import companies, sectors, admin, ai_context
+from routers import companies, sectors, admin, ai_context, scores
 from services.scheduler import SchedulerService
 
 # Logging configuration
@@ -104,12 +104,14 @@ async def root():
             "companies": "/api/v1/companies/",
             "sectors": "/api/v1/sectors/", 
             "admin": "/api/v1/admin/",
-            "ai_context": "/api/v1/ai/"
+            "ai_context": "/api/v1/ai/",
+            "scores": "/api/v1/scores/"
         },
         "features": [
             "Mali tablo çekimi (İş Yatırım API)",
             "50+ finansal rasyo hesaplama",
             "Sektör benchmark'ları (F1-F5 filtreli)",
+            "Şirket skorları (0-100 rating sistemi)",
             "AI context generation",
             "Real-time data updates"
         ]
@@ -120,6 +122,7 @@ app.include_router(companies.router, prefix="/api/v1/companies", tags=["Companie
 app.include_router(sectors.router, prefix="/api/v1/sectors", tags=["Sectors"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(ai_context.router, prefix="/api/v1/ai", tags=["AI Context"])
+app.include_router(scores.router, prefix="/api/v1", tags=["Scores"])
 
 # Global exception handler
 @app.exception_handler(Exception)

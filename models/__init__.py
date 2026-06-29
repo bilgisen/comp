@@ -3,6 +3,7 @@
 from .company import Company, CompanyMetrics
 from .financial import FetchLog, FinancialStatementRaw, CompanyRatio
 from .benchmark import SectorBenchmark, SectorBenchmarkPeer, ComparisonResult, AIContextCache
+from .score import CompanyScore, CompanyScoreDetail, GlobalBenchmark
 
 __all__ = [
     "Company",
@@ -13,5 +14,8 @@ __all__ = [
     "SectorBenchmark",
     "SectorBenchmarkPeer", 
     "ComparisonResult",
-    "AIContextCache"
+    "AIContextCache",
+    "CompanyScore",
+    "CompanyScoreDetail",
+    "GlobalBenchmark",
 ]
