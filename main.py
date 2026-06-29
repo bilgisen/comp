@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from core.config import settings
 from core.database import get_db, init_db
-from routers import companies, sectors, admin, ai_context, scores
+from routers import companies, sectors, admin, ai_context, scores, ai_analysis
 from services.scheduler import SchedulerService
 
 # Logging configuration
@@ -123,6 +123,7 @@ app.include_router(sectors.router, prefix="/api/v1/sectors", tags=["Sectors"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(ai_context.router, prefix="/api/v1/ai", tags=["AI Context"])
 app.include_router(scores.router, prefix="/api/v1", tags=["Scores"])
+app.include_router(ai_analysis.router, prefix="/api/v1", tags=["AI Analysis"])
 
 # Global exception handler
 @app.exception_handler(Exception)
