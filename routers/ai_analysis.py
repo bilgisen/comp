@@ -301,7 +301,7 @@ def generate_ratio_comparison_cards(
 ) -> List[RatioComparisonCard]:
     """Generate ratio comparison cards"""
     
-    # Define key ratios based on tier
+    # Define key ratios based on tier - only using ratios that exist in company_ratios table
     if tier == UserTier.ANONYMOUS:
         key_ratios = ["roe", "current_ratio", "debt_ratio"]
     elif tier == UserTier.MEMBER:
