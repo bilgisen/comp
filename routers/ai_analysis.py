@@ -486,22 +486,23 @@ async def generate_member_summary(
 ) -> AnalysisSummary:
     """Generate member-level summary (1 paragraph)"""
     
-    # Build context for analysis
-    score_desc = "güçlü" if score_card.score_sektor and score_card.score_sektor > 60 else "orta" if score_card.score_sektor and score_card.score_sektor > 40 else "zayıf"
+    # Build context for analysis - handle null scores gracefully
+    score_val = score_card.score_sektor if score_card and score_card.score_sektor else None
+    score_desc = "güçlü" if score_val and score_val > 60 else "orta" if score_val and score_val > 40 else "zayıf" if score_val else "belirsiz"
     
-    top_ratios = sorted(ratio_cards, key=lambda x: x.percentile or 0, reverse=True)[:3]
+    top_ratios = sorted(ratio_cards, key=lambda x: x.percentile or 0, reverse=True)[:3] if ratio_cards else []
     ratio_strengths = [r.ratio_name for r in top_ratios if r.percentile and r.percentile > 60]
     
-    summary_text = f"""
-    {company_name} ({ticker}), {sector} sektöründe {score_desc} bir performans sergiliyor.
-    Temel analiz puanı {score_card.score_sektor:.1f}/100 ile sektör içinde %{score_card.percentile_sector} persentilde yer alıyor.
-    """.strip()
+    if score_val:
+        summary_text = f"{company_name} ({ticker}), {sector} sektöründe {score_desc} bir performans sergiliyor. Temel analiz puanı {score_val:.1f}/100 ile sektör içinde %{score_card.percentile_sector or 50} persentilde yer alıyor."
+    else:
+        summary_text = f"{company_name} ({ticker}), {sector} sektöründe faaliyet gösteriyor. Temel analiz verileri hesaplanıyor."
     
     if ratio_strengths:
         summary_text += f" Öne çıkan metrikler: {', '.join(ratio_strengths[:2])}."
     
     key_strengths = ratio_strengths[:2] if ratio_strengths else ["Sektör içi konum"]
-    key_concerns = [r.ratio_name for r in ratio_cards if r.percentile and r.percentile < 40][:2]
+    key_concerns = [r.ratio_name for r in ratio_cards if r.percentile and r.percentile < 40][:2] if ratio_cards else []
     
     return AnalysisSummary(
         summary=summary_text,
@@ -522,51 +523,60 @@ async def generate_subscriber_report(
 ) -> DetailedReport:
     """Generate subscriber-level detailed report"""
     
+    # Handle null scores gracefully
+    score_val = score_card.score_sektor if score_card and score_card.score_sektor else None
+    karlilik_val = score_card.score_karlilik if score_card and score_card.score_karlilik else None
+    finansal_val = score_card.score_finansal if score_card and score_card.score_finansal else None
+    
     # Executive summary
-    exec_summary = f"""
-    {company_name} ({ticker}), {sector} sektöründe {sector_position.rank}. sırada yer alıyor.
-    Temel analiz puanı: {score_card.score_sektor:.1f}/100.
-    Kârlılık skoru: {score_card.score_karlilik:.1f}, Finansal sağlık: {score_card.score_finansal:.1f}.
-    """.strip()
+    if score_val:
+        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe {sector_position.rank if sector_position else '-'}. sırada yer alıyor. Temel analiz puanı: {score_val:.1f}/100."
+        if karlilik_val and finansal_val:
+            exec_summary += f" Kârlılık skoru: {karlilik_val:.1f}, Finansal sağlık: {finansal_val:.1f}."
+    else:
+        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe faaliyet gösteriyor. Detaylı analiz verileri hesaplanıyor."
     
     # Financial position
-    financial_pos = f"""
-    Şirketin finansal durumu {'güçlü' if score_card.score_finansal and score_card.score_finansal > 60 else 'orta' if score_card.score_finansal and score_card.score_finansal > 40 else 'dikkat gerektirir'}.
-    Sektör içi pozisyon: %{sector_position.percentile:.0f} percentil.
-    """.strip()
+    if finansal_val:
+        financial_pos = f"Şirketin finansal durumu {'güçlü' if finansal_val > 60 else 'orta' if finansal_val > 40 else 'dikkat gerektirir'}."
+    else:
+        financial_pos = "Finansal durum analizi için yeterli veri bulunamadı."
+    
+    if sector_position:
+        financial_pos += f" Sektör içi pozisyon: %{sector_position.percentile:.0f} percentil."
     
     # Profitability analysis
-    profitability_rats = [r for r in ratio_cards if r.ratio_code in ['roe', 'roa', 'gross_margin', 'net_margin']]
+    profitability_rats = [r for r in ratio_cards if r.ratio_code in ['roe', 'roa', 'gross_margin', 'net_margin']] if ratio_cards else []
     profitability_analysis = "Kârlılık metrikleri: " + ", ".join([
         f"{r.ratio_name}: {r.company_value:.2f}" for r in profitability_rats[:3]
     ]) if profitability_rats else "Kârlılık verisi yetersiz."
     
     # Balance sheet analysis
-    balance_rats = [r for r in ratio_cards if r.ratio_code in ['current_ratio', 'debt_ratio', 'net_debt_to_equity']]
+    balance_rats = [r for r in ratio_cards if r.ratio_code in ['current_ratio', 'debt_ratio', 'net_debt_to_equity']] if ratio_cards else []
     balance_analysis = "Bilanço metrikleri: " + ", ".join([
         f"{r.ratio_name}: {r.company_value:.2f}" for r in balance_rats[:3]
     ]) if balance_rats else "Bilanço verisi yetersiz."
     
     # Sector comparison
-    sector_comp = f"""
-    Sektör karşılaştırmasında {len(sector_position.above_median_ratios)} oranda sektör ortalamasının üzerinde,
-    {len(sector_position.below_median_ratios)} oranda ise altında performans gösteriyor.
-    """.strip()
+    if sector_position:
+        sector_comp = f"Sektör karşılaştırmasında {len(sector_position.above_median_ratios)} oranda sektör ortalamasının üzerinde, {len(sector_position.below_median_ratios)} oranda ise altında performans gösteriyor."
+    else:
+        sector_comp = "Sektör karşılaştırma verisi yetersiz."
     
     # Catalysts and risks
     catalysts = ["Sektörel büyüme potansiyeli", "Operasyonel verimlilik artışı"]
     risks = ["Piyasa volatilitesi", "Sektörel rekabet"]
     
-    if swot_card.strengths:
+    if swot_card and swot_card.strengths:
         catalysts.extend([s.item for s in swot_card.strengths[:2]])
-    if swot_card.threats:
+    if swot_card and swot_card.threats:
         risks.extend([t.item for t in swot_card.threats[:2]])
     
     # Conclusion
-    conclusion = f"""
-    {company_name}, temel analiz kriterlerine göre {'olumlu' if score_card.score_sektor and score_card.score_sektor > 60 else 'nötr' if score_card.score_sektor and score_card.score_sektor > 40 else 'dikkatli'} bir görünüm sunuyor.
-    Yatırımcıların kendi risk profillerine göre pozisyon alması önerilir.
-    """.strip()
+    if score_val:
+        conclusion = f"{company_name}, temel analiz kriterlerine göre {'olumlu' if score_val > 60 else 'nötr' if score_val > 40 else 'dikkatli'} bir görünüm sunuyor. Yatırımcıların kendi risk profillerine göre pozisyon alması önerilir."
+    else:
+        conclusion = f"{company_name} için detaylı analiz tamamlanınca güncellenecektir."
     
     return DetailedReport(
         executive_summary=exec_summary,
