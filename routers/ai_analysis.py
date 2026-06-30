@@ -209,8 +209,10 @@ def get_user_tier_from_headers(authorization: Optional[str], user_tier_header: O
         tier_map = {
             "ultimate": UserTier.SUBSCRIBER,
             "pro": UserTier.SUBSCRIBER,
+            "subscriber": UserTier.SUBSCRIBER,
             "standard": UserTier.MEMBER,
             "free": UserTier.MEMBER,
+            "member": UserTier.MEMBER,
         }
         return tier_map.get(user_tier_header.lower(), UserTier.ANONYMOUS)
     
@@ -362,68 +364,205 @@ def generate_ratio_comparison_cards(
 
 
 def generate_swot_card(db, ticker: str, period_key: str) -> SWOTCard:
-    """Generate SWOT analysis card"""
+    """Generate SWOT analysis card based on actual ratio data and sector comparisons."""
     
-    # Get company scores and ratios
-    scores = db.execute(text("""
+    # Get company ratios with sector comparisons
+    ratios = db.execute(text("""
         SELECT 
-            cs.score_sektor, cs.score_karlilik, cs.score_finansal, cs.score_verimlilik,
-            cr.ratio_code, cr.ratio_value
-        FROM company_scores cs
-        LEFT JOIN company_ratios cr ON cr.ticker = cs.ticker AND cr.period_key = cs.period_key
-        WHERE cs.ticker = :ticker AND cs.period_key = :period_key
+            cr.ratio_code, cr.ratio_value,
+            sb.median_ew as sector_median,
+            sb.p25, sb.p75,
+            CASE 
+                WHEN cr.ratio_value IS NULL THEN NULL
+                WHEN sb.median_ew IS NULL THEN NULL
+                WHEN cr.ratio_value > sb.p75 THEN 'above_high'
+                WHEN cr.ratio_value > sb.median_ew THEN 'above_median'
+                WHEN cr.ratio_value > sb.p25 THEN 'below_median'
+                ELSE 'below_low'
+            END as position
+        FROM company_ratios cr
+        LEFT JOIN companies c ON cr.ticker = c.ticker
+        LEFT JOIN sector_benchmarks sb 
+            ON sb.ratio_code = cr.ratio_code 
+            AND sb.sector_main = c.sector_main
+            AND sb.period_key = cr.period_key
+        WHERE cr.ticker = :ticker AND cr.period_key = :period_key
+          AND cr.ratio_value IS NOT NULL
     """), {"ticker": ticker, "period_key": period_key}).fetchall()
+    
+    # Get company scores
+    scores = db.execute(text("""
+        SELECT score_sektor, score_karlilik, score_finansal, score_verimlilik
+        FROM company_scores
+        WHERE ticker = :ticker AND period_key = :period_key
+    """), {"ticker": ticker, "period_key": period_key}).fetchone()
     
     strengths = []
     weaknesses = []
     opportunities = []
     threats = []
     
-    # Analyze based on scores
-    for row in scores:
-        if row.score_karlilik and float(row.score_karlilik) > 70:
-            strengths.append(SWOTItem(
-                item="Yüksek kârlılık performansı",
-                impact="high",
-                source="score_karlilik"
-            ))
-        elif row.score_karlilik and float(row.score_karlilik) < 40:
+    # Ratio-specific analysis maps
+    RATIO_LABELS = {
+        "roe": "Özkaynak kârlılığı (ROE)",
+        "roa": "Aktif kârlılığı (ROA)",
+        "gross_margin": "Brüt kâr marjı",
+        "net_margin": "Net kâr marjı",
+        "operating_margin": "Operasyonel marj",
+        "ebitda_margin": "FAVÖK marjı",
+        "current_ratio": "Cari oran",
+        "acid_test_ratio": "Asit test oranı",
+        "debt_ratio": "Borçlanma oranı",
+        "debt_to_equity": "Borç/Özsermaye",
+        "net_debt_to_equity": "Net borç/Özsermaye",
+        "asset_turnover": "Aktif devir hızı",
+        "cost_income_ratio": "Maliyet/Gelir oranı",
+        "loan_to_deposit": "Kredi/Mevduat oranı",
+        "npl_ratio": "Takipteki kredi oranı",
+        "capital_adequacy": "Sermaye yeterlilik oranı",
+        "net_interest_margin": "Net faiz marjı",
+    }
+    
+    # Map ratios to SWOT categories
+    STRENGTH_RATIOS = {
+        "roe", "roa", "gross_margin", "net_margin", "operating_margin", "ebitda_margin",
+        "current_ratio", "acid_test_ratio", "asset_turnover", "net_interest_margin", "capital_adequacy"
+    }
+    WEAKNESS_RATIOS = {"debt_ratio", "debt_to_equity", "net_debt_to_equity", "npl_ratio"}
+    
+    for row in ratios:
+        label = RATIO_LABELS.get(row.ratio_code, row.ratio_code)
+        pos = row.position
+        val = float(row.ratio_value) if row.ratio_value else None
+        med = float(row.sector_median) if row.sector_median else None
+        
+        if pos is None or val is None:
+            continue
+        
+        # Strengths: significantly above sector median (top quartile)
+        if pos == "above_high" and row.ratio_code in STRENGTH_RATIOS:
+            diff_pct = ((val - med) / abs(med) * 100) if med and med != 0 else 0
+            if diff_pct > 20:
+                impacts = "high"
+                item = f"{label} sektör ortalamasının显著 üzerinde (%{diff_pct:.0f} выше)"
+            else:
+                impacts = "medium"
+                item = f"{label} sektör üst çeyreğinde"
+            strengths.append(SWOTItem(item=item, impact=impacts, source=row.ratio_code))
+        
+        # Weaknesses: significantly below sector median (bottom quartile)
+        elif pos == "below_low" and row.ratio_code in WEAKNESS_RATIOS:
+            diff_pct = ((med - val) / abs(med) * 100) if med and med != 0 else 0
+            if diff_pct > 20:
+                impacts = "high"
+                item = f"{label} sektör ortalamasının belirgin şekilde altında"
+            else:
+                impacts = "medium"
+                item = f"{label} sektör alt çeyreğinde"
+            weaknesses.append(SWOTItem(item=item, impact=impacts, source=row.ratio_code))
+        
+        elif pos == "below_low" and row.ratio_code in STRENGTH_RATIOS:
+            # A normally-good ratio is below median = weakness
             weaknesses.append(SWOTItem(
-                item="Kârlılık baskısı",
-                impact="high",
-                source="score_karlilik"
+                item=f"{label} sektör ortalamasının altında",
+                impact="medium",
+                source=row.ratio_code
             ))
         
-        if row.score_finansal and float(row.score_finansal) > 70:
-            strengths.append(SWOTItem(
-                item="Güçlü finansal yapı",
-                impact="high",
-                source="score_finansal"
-            ))
-        elif row.score_finansal and float(row.score_finansal) < 40:
-            threats.append(SWOTItem(
-                item="Finansal risk faktörleri",
+        elif pos == "above_high" and row.ratio_code in WEAKNESS_RATIOS:
+            # A normally-bad ratio is above median = concern
+            weaknesses.append(SWOTItem(
+                item=f"{label} sektör ortalamasının üzerinde (risk)",
                 impact="medium",
-                source="score_finansal"
+                source=row.ratio_code
             ))
     
-    # Add generic opportunities and threats
-    opportunities.extend([
-        SWOTItem(item="Sektör büyüme potansiyeli", impact="medium", source="sector_trend"),
-        SWOTItem(item="Pazar payı genişleme imkanı", impact="medium", source="market_position")
-    ])
+    # Score-based analysis
+    if scores:
+        if scores.score_karlilik and float(scores.score_karlilik) > 70:
+            strengths.append(SWOTItem(
+                item="Güçlü kârlılık performansı (sektör üst çeyreği)",
+                impact="high", source="score_karlilik"
+            ))
+        elif scores.score_karlilik and float(scores.score_karlilik) < 40:
+            weaknesses.append(SWOTItem(
+                item="Kârlılık performansı sektör ortalamasının altında",
+                impact="high", source="score_karlilik"
+            ))
     
-    threats.extend([
-        SWOTItem(item="Sektörel rekabet baskısı", impact="medium", source="sector_analysis"),
-        SWOTItem(item="Makroekonomik belirsizlik", impact="low", source="macro_environment")
-    ])
+    # Sector-specific opportunities and threats based on ratio patterns
+    ratio_codes = {r.ratio_code for r in ratios}
+    above_count = sum(1 for r in ratios if r.position in ("above_high", "above_median"))
+    below_count = sum(1 for r in ratios if r.position in ("below_low", "below_median"))
+    total = len(ratios) if ratios else 1
+    
+    if above_count > total * 0.6:
+        opportunities.append(SWOTItem(
+            item="Çoğunlukla sektörün üzerinde performans — büyüme potansiyeli güçlü",
+            impact="high", source="sector_pattern"
+        ))
+    elif below_count > total * 0.6:
+        threats.append(SWOTItem(
+            item="Çoğunlukla sektörün altında performans — iyileşme gereksinimi var",
+            impact="high", source="sector_pattern"
+        ))
+    
+    # Liquidity/leverage specific
+    if "current_ratio" in ratio_codes:
+        cr_row = next((r for r in ratios if r.ratio_code == "current_ratio"), None)
+        if cr_row and cr_row.position == "above_high":
+            opportunities.append(SWOTItem(
+                item="Güçlü likidite pozisyonu — büyüme yatırımları için kaynak mevcut",
+                impact="medium", source="current_ratio"
+            ))
+        elif cr_row and cr_row.position == "below_low":
+            threats.append(SWOTItem(
+                item="Düşük likidite — kısa vadeli borç ödeme kapasitesi risk altında",
+                impact="high", source="current_ratio"
+            ))
+    
+    if "debt_ratio" in ratio_codes:
+        dr_row = next((r for r in ratios if r.ratio_code == "debt_ratio"), None)
+        if dr_row and dr_row.position == "below_low":
+            opportunities.append(SWOTItem(
+                item="Düşük borçlanma — finansal esneklik yüksek",
+                impact="medium", source="debt_ratio"
+            ))
+        elif dr_row and dr_row.position == "above_high":
+            threats.append(SWOTItem(
+                item="Yüksek borçlanma — faiz artışı riski",
+                impact="high", source="debt_ratio"
+            ))
+    
+    if "npl_ratio" in ratio_codes:
+        npl_row = next((r for r in ratios if r.ratio_code == "npl_ratio"), None)
+        if npl_row and float(npl_row.ratio_value or 0) > 0.05:
+            threats.append(SWOTItem(
+                item=f"Takipteki kredi oranı yüksek (%{float(npl_row.ratio_value)*100:.1f})",
+                impact="high", source="npl_ratio"
+            ))
+        elif npl_row and float(npl_row.ratio_value or 0) < 0.02:
+            strengths.append(SWOTItem(
+                item="Kredi kalitesi güçlü — düşük takipteki kredi oranı",
+                impact="medium", source="npl_ratio"
+            ))
+    
+    # Ensure at least some items
+    if not strengths:
+        strengths.append(SWOTItem(item="Sektördeki konumunu koruyor", impact="low", source="general"))
+    if not weaknesses:
+        weaknesses.append(SWOTItem(item="Belirgin zayıf yön tespit edilemedi", impact="low", source="general"))
+    if not opportunities:
+        opportunities.append(SWOTItem(item="Sektör dinamiklerine göre konumunu değerlendirilmeli", impact="low", source="general"))
+    if not threats:
+        threats.append(SWOTItem(item="Piyasa koşullarına dikkat edilmeli", impact="low", source="general"))
     
     return SWOTCard(
         strengths=strengths[:5],
         weaknesses=weaknesses[:5],
         opportunities=opportunities[:5],
         threats=threats[:5],
-        overall_assessment=None  # Will be generated by AI
+        overall_assessment=None
     )
 
 
@@ -484,30 +623,64 @@ async def generate_member_summary(
     score_card: ScoreCard,
     ratio_cards: List[RatioComparisonCard]
 ) -> AnalysisSummary:
-    """Generate member-level summary (1 paragraph)"""
+    """Generate member-level summary based on actual ratio data."""
     
-    # Build context for analysis - handle null scores gracefully
     score_val = score_card.score_sektor if score_card and score_card.score_sektor else None
-    score_desc = "güçlü" if score_val and score_val > 60 else "orta" if score_val and score_val > 40 else "zayıf" if score_val else "belirsiz"
+    karlilik_val = score_card.score_karlilik if score_card and score_card.score_karlilik else None
+    percentile = score_card.percentile_sector if score_card else None
     
-    top_ratios = sorted(ratio_cards, key=lambda x: x.percentile or 0, reverse=True)[:3] if ratio_cards else []
-    ratio_strengths = [r.ratio_name for r in top_ratios if r.percentile and r.percentile > 60]
-    
+    # Build summary from actual data
     if score_val:
-        summary_text = f"{company_name} ({ticker}), {sector} sektöründe {score_desc} bir performans sergiliyor. Temel analiz puanı {score_val:.1f}/100 ile sektör içinde %{score_card.percentile_sector or 50} persentilde yer alıyor."
+        if score_val > 70:
+            perf = "güçlü"
+        elif score_val > 50:
+            perf = "ortalamanın üzerinde"
+        elif score_val > 30:
+            perf = "ortalama"
+        else:
+            perf = "zayıf"
+        
+        summary_text = f"{company_name} ({ticker}), {sector} sektöründe {perf} bir performans sergiliyor. "
+        summary_text += f"Temel analiz puanı {score_val:.1f}/100."
+        
+        if percentile:
+            summary_text += f" Sektör içinde %{percentile:.0f} percentilde yer alıyor."
     else:
         summary_text = f"{company_name} ({ticker}), {sector} sektöründe faaliyet gösteriyor. Temel analiz verileri hesaplanıyor."
     
-    if ratio_strengths:
-        summary_text += f" Öne çıkan metrikler: {', '.join(ratio_strengths[:2])}."
+    # Key strengths from actual ratio data
+    key_strengths = []
+    top_ratios = sorted(
+        [r for r in ratio_cards if r.percentile is not None],
+        key=lambda x: x.percentile or 0,
+        reverse=True
+    )[:5]
     
-    key_strengths = ratio_strengths[:2] if ratio_strengths else ["Sektör içi konum"]
-    key_concerns = [r.ratio_name for r in ratio_cards if r.percentile and r.percentile < 40][:2] if ratio_cards else []
+    for r in top_ratios[:3]:
+        if r.percentile and r.percentile > 60:
+            key_strengths.append(r.ratio_name)
+    
+    if not key_strengths:
+        key_strengths = ["Sektör içi genel konum"]
+    
+    # Key concerns from actual ratio data
+    key_concerns = []
+    weak_ratios = sorted(
+        [r for r in ratio_cards if r.percentile is not None],
+        key=lambda x: x.percentile or 0
+    )[:5]
+    
+    for r in weak_ratios[:3]:
+        if r.percentile and r.percentile < 40:
+            key_concerns.append(r.ratio_name)
+    
+    if not key_concerns:
+        key_concerns = ["Belirgin risk alanı tespit edilmedi"]
     
     return AnalysisSummary(
         summary=summary_text,
         key_strengths=key_strengths,
-        key_concerns=key_concerns if key_concerns else ["Yetersiz veri"],
+        key_concerns=key_concerns,
         investment_thesis=None
     )
 
@@ -521,62 +694,175 @@ async def generate_subscriber_report(
     swot_card: SWOTCard,
     sector_position: SectorPositionCard
 ) -> DetailedReport:
-    """Generate subscriber-level detailed report"""
+    """Generate subscriber-level detailed report based on actual ratio data."""
     
-    # Handle null scores gracefully
     score_val = score_card.score_sektor if score_card and score_card.score_sektor else None
     karlilik_val = score_card.score_karlilik if score_card and score_card.score_karlilik else None
-    finansal_val = score_card.score_finansal if score_card and score_card.score_finansal else None
     
-    # Executive summary
-    if score_val:
-        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe {sector_position.rank if sector_position else '-'}. sırada yer alıyor. Temel analiz puanı: {score_val:.1f}/100."
-        if karlilik_val and finansal_val:
-            exec_summary += f" Kârlılık skoru: {karlilik_val:.1f}, Finansal sağlık: {finansal_val:.1f}."
+    # ── Executive Summary ──────────────────────────────────────────────
+    if score_val and sector_position:
+        rank_text = f"sektöründe {sector_position.rank}. sırada"
+        perc_text = f"%{sector_position.percentile:.0f} percentilde"
+        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe {rank_text}, {perc_text} yer alıyor. "
+        exec_summary += f"Temel analiz puanı: {score_val:.1f}/100."
+        
+        if karlilik_val:
+            exec_summary += f" Kârlılık skoru: {karlilik_val:.1f}/100."
+        
+        # Add ratio highlights
+        top_ratios = [r for r in ratio_cards if r.percentile and r.percentile > 70][:2]
+        if top_ratios:
+            names = [r.ratio_name for r in top_ratios]
+            exec_summary += f" Öne çıkan metrikler: {', '.join(names)}."
+        
+        weak_ratios = [r for r in ratio_cards if r.percentile and r.percentile < 30][:2]
+        if weak_ratios:
+            names = [r.ratio_name for r in weak_ratios]
+            exec_summary += f" Zayıf alanlar: {', '.join(names)}."
     else:
-        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe faaliyet gösteriyor. Detaylı analiz verileri hesaplanıyor."
+        exec_summary = f"{company_name} ({ticker}), {sector} sektöründe faaliyet gösteriyor. Temel analiz puanı henüz hesaplanmamış."
     
-    # Financial position
-    if finansal_val:
-        financial_pos = f"Şirketin finansal durumu {'güçlü' if finansal_val > 60 else 'orta' if finansal_val > 40 else 'dikkat gerektirir'}."
+    # ── Financial Position ─────────────────────────────────────────────
+    health_ratios = [r for r in ratio_cards if r.ratio_code in [
+        'current_ratio', 'acid_test_ratio', 'debt_ratio', 'debt_to_equity', 'net_debt_to_equity'
+    ]]
+    
+    if health_ratios:
+        above = [r for r in health_ratios if r.percentile and r.percentile > 60]
+        below = [r for r in health_ratios if r.percentile and r.percentile < 40]
+        
+        if len(above) > len(below):
+            financial_pos = f"Şirketin finansal durumu güçlü. "
+        elif len(below) > len(above):
+            financial_pos = f"Şirketin finansal durumunda dikkat gerektiren alanlar mevcut. "
+        else:
+            financial_pos = f"Şirketin finansal durumu sektör ortalamasında. "
+        
+        for r in health_ratios[:3]:
+            val_text = f"{r.company_value:.2f}" if r.company_value else "N/A"
+            if r.sector_median:
+                diff = "üzerinde" if (r.company_value or 0) > r.sector_median else "altında"
+                financial_pos += f"{r.ratio_name}: {val_text} (sektör ortalamasının {diff}). "
+            else:
+                financial_pos += f"{r.ratio_name}: {val_text}. "
     else:
-        financial_pos = "Finansal durum analizi için yeterli veri bulunamadı."
+        financial_pos = "Finansal sağlık verisi yetersiz."
     
+    # ── Profitability Analysis ─────────────────────────────────────────
+    prof_ratios = [r for r in ratio_cards if r.ratio_code in [
+        'roe', 'roa', 'gross_margin', 'net_margin', 'operating_margin', 'ebitda_margin'
+    ]]
+    
+    if prof_ratios:
+        profitability_analysis = "Kârlılık metrikleri: "
+        for r in prof_ratios[:4]:
+            val_text = f"%{r.company_value*100:.1f}" if r.company_value and r.ratio_code in [
+                'roe', 'roa', 'gross_margin', 'net_margin', 'operating_margin', 'ebitda_margin'
+            ] else f"{r.company_value:.2f}" if r.company_value else "N/A"
+            
+            if r.percentile:
+                if r.percentile > 70:
+                    status = "sektör üst çeyreğinde"
+                elif r.percentile > 40:
+                    status = "sektör ortalamasında"
+                else:
+                    status = "sektör altında"
+                profitability_analysis += f"{r.ratio_name}: {val_text} ({status}), "
+            else:
+                profitability_analysis += f"{r.ratio_name}: {val_text}, "
+        profitability_analysis = profitability_analysis.rstrip(", ") + "."
+    else:
+        profitability_analysis = "Kârlılık verisi yetersiz."
+    
+    # ── Balance Sheet Analysis ─────────────────────────────────────────
+    balance_rats = [r for r in ratio_cards if r.ratio_code in [
+        'current_ratio', 'debt_ratio', 'debt_to_equity', 'net_debt_to_equity', 'asset_turnover'
+    ]]
+    
+    if balance_rats:
+        balance_analysis = "Bilanço metrikleri: "
+        for r in balance_rats[:4]:
+            val_text = f"{r.company_value:.2f}" if r.company_value else "N/A"
+            if r.percentile:
+                if r.percentile > 60:
+                    status = "sektör üzerinde"
+                elif r.percentile < 40:
+                    status = "sektör altında"
+                else:
+                    status = "sektör ortalamasında"
+                balance_analysis += f"{r.ratio_name}: {val_text} ({status}), "
+            else:
+                balance_analysis += f"{r.ratio_name}: {val_text}, "
+        balance_analysis = balance_analysis.rstrip(", ") + "."
+    else:
+        balance_analysis = "Bilanço verisi yetersiz."
+    
+    # ── Sector Comparison ──────────────────────────────────────────────
     if sector_position:
-        financial_pos += f" Sektör içi pozisyon: %{sector_position.percentile:.0f} percentil."
-    
-    # Profitability analysis
-    profitability_rats = [r for r in ratio_cards if r.ratio_code in ['roe', 'roa', 'gross_margin', 'net_margin']] if ratio_cards else []
-    profitability_analysis = "Kârlılık metrikleri: " + ", ".join([
-        f"{r.ratio_name}: {r.company_value:.2f}" for r in profitability_rats[:3]
-    ]) if profitability_rats else "Kârlılık verisi yetersiz."
-    
-    # Balance sheet analysis
-    balance_rats = [r for r in ratio_cards if r.ratio_code in ['current_ratio', 'debt_ratio', 'net_debt_to_equity']] if ratio_cards else []
-    balance_analysis = "Bilanço metrikleri: " + ", ".join([
-        f"{r.ratio_name}: {r.company_value:.2f}" for r in balance_rats[:3]
-    ]) if balance_rats else "Bilanço verisi yetersiz."
-    
-    # Sector comparison
-    if sector_position:
-        sector_comp = f"Sektör karşılaştırmasında {len(sector_position.above_median_ratios)} oranda sektör ortalamasının üzerinde, {len(sector_position.below_median_ratios)} oranda ise altında performans gösteriyor."
+        above_median = len(sector_position.above_median_ratios)
+        below_median = len(sector_position.below_median_ratios)
+        total = above_median + below_median
+        
+        if total > 0:
+            above_pct = (above_median / total) * 100
+            if above_pct > 70:
+                perf_desc = "sektör ortalamasının üzerinde güçlü bir performans"
+            elif above_pct > 50:
+                perf_desc = "çoğunlukla sektör ortalamasının üzerinde"
+            elif above_pct > 30:
+                perf_desc = "sektör ortalamasına yakın bir performans"
+            else:
+                perf_desc = "çoğunlukla sektör ortalamasının altında"
+            
+            sector_comp = f"Sektör karşılaştırmasında {above_median}/{total} oranda {perf_desc} gösteriyor."
+            if sector_position.percentile:
+                sector_comp += f" Genel percentil: %{sector_position.percentile:.0f}."
+        else:
+            sector_comp = "Sektör karşılaştırma verisi yetersiz."
     else:
-        sector_comp = "Sektör karşılaştırma verisi yetersiz."
+        sector_comp = "Sektör karşılaştırma verisi bulunamadı."
     
-    # Catalysts and risks
-    catalysts = ["Sektörel büyüme potansiyeli", "Operasyonel verimlilik artışı"]
-    risks = ["Piyasa volatilitesi", "Sektörel rekabet"]
+    # ── Catalysts and Risks (from SWOT) ────────────────────────────────
+    catalysts = []
+    risks = []
     
-    if swot_card and swot_card.strengths:
-        catalysts.extend([s.item for s in swot_card.strengths[:2]])
-    if swot_card and swot_card.threats:
-        risks.extend([t.item for t in swot_card.threats[:2]])
+    if swot_card:
+        if swot_card.strengths:
+            catalysts.extend([s.item for s in swot_card.strengths[:3]])
+        if swot_card.opportunities:
+            catalysts.extend([o.item for o in swot_card.opportunities[:2]])
+        if swot_card.weaknesses:
+            risks.extend([w.item for w in swot_card.weaknesses[:3]])
+        if swot_card.threats:
+            risks.extend([t.item for t in swot_card.threats[:2]])
     
-    # Conclusion
+    if not catalysts:
+        catalysts = ["Sektördeki güçlü konumunu sürdürme potansiyeli"]
+    if not risks:
+        risks = ["Piyasa koşullarındaki değişkenlikler"]
+    
+    # ── Conclusion (data-driven) ───────────────────────────────────────
     if score_val:
-        conclusion = f"{company_name}, temel analiz kriterlerine göre {'olumlu' if score_val > 60 else 'nötr' if score_val > 40 else 'dikkatli'} bir görünüm sunuyor. Yatırımcıların kendi risk profillerine göre pozisyon alması önerilir."
+        if score_val > 70:
+            conclusion = f"{company_name}, temel analiz kriterlerine göre güçlü bir performans sergiliyor (puan: {score_val:.1f}/100). "
+            conclusion += "Sektöründe üst sıralarda yer alması, sağlıklı finansal yapı ve kârlılık göstergelerine işaret ediyor."
+        elif score_val > 50:
+            conclusion = f"{company_name}, temel analiz kriterlerine göre ortalamanın üzerinde bir performans sergiliyor (puan: {score_val:.1f}/100). "
+            conclusion += "Bazı metriklerde sektör ortalamasının üzerinde olmasına rağmen, iyileştirilebilecek alanlar mevcut."
+        elif score_val > 30:
+            conclusion = f"{company_name}, temel analiz kriterlerine göre ortalama bir performans sergiliyor (puan: {score_val:.1f}/100). "
+            conclusion += "Sektöründe orta sıralarda yer alıyor. Kârlılık ve finansal yapı alanlarında iyileşme potansiyeli bulunuyor."
+        else:
+            conclusion = f"{company_name}, temel analiz kriterlerine göre zayıf bir performans sergiliyor (puan: {score_val:.1f}/100). "
+            conclusion += "Sektöründe alt sıralarda yer alması, ciddi yapısal sorunlara işaret ediyor. Yatırım kararı alınırken dikkatli olunmalı."
+        
+        # Add SWOT-based insight
+        if swot_card and swot_card.strengths:
+            conclusion += f" Güçlü yönler: {swot_card.strengths[0].item}."
+        if swot_card and swot_card.threats:
+            conclusion += f" Riskler: {swot_card.threats[0].item}."
     else:
-        conclusion = f"{company_name} için detaylı analiz tamamlanınca güncellenecektir."
+        conclusion = f"{company_name} için temel analiz puanı henüz hesaplanmamış. Yeterli finansal veri bekleniyor."
     
     return DetailedReport(
         executive_summary=exec_summary,
@@ -588,7 +874,7 @@ async def generate_subscriber_report(
         catalysts=catalysts[:5],
         risks=risks[:5],
         conclusion=conclusion,
-        disclaimer="Bu analiz yatırım tavsiyesi değildir. Yatırım kararlarınız için profesyonel danışmanlık alınız."
+        disclaimer="Bu analiz otomatik veri analizine dayanmaktadır ve yatırım tavsiyesi değildir. Yatırım kararlarınız için profesyonel danışmanlık alınız."
     )
 
 
