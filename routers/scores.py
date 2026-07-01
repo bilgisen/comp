@@ -372,6 +372,7 @@ async def compare_scores(
             cs.score_karlilik,
             cs.score_finansal,
             cs.score_verimlilik,
+            cs.score_degerleme,
             cs.reliability_sektor,
             cs.reliability_genel
         FROM company_scores cs
@@ -396,6 +397,7 @@ async def compare_scores(
                     "karlilik": float(row.score_karlilik) if row.score_karlilik else None,
                     "finansal": float(row.score_finansal) if row.score_finansal else None,
                     "verimlilik": float(row.score_verimlilik) if row.score_verimlilik else None,
+                    "degerleme": float(row.score_degerleme) if row.score_degerleme else None,
                 },
                 "reliability": {
                     "sektor": row.reliability_sektor,

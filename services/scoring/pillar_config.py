@@ -124,6 +124,16 @@ BANKA_PILLARS: List[PillarConfig] = [
     ),
     
     PillarConfig(
+        name="finansal",
+        weight=0.25,
+        min_ratios=1,
+        description="Varlık kalitesi ve kredi riski",
+        ratios=[
+            RatioWeight("npl_ratio", weight=1.0, higher_is_better=False),
+        ]
+    ),
+    
+    PillarConfig(
         name="verimlilik",
         weight=0.25,
         min_ratios=1,
@@ -134,20 +144,10 @@ BANKA_PILLARS: List[PillarConfig] = [
     ),
     
     PillarConfig(
-        name="varlik_kalitesi",
-        weight=0.25,
-        min_ratios=1,
-        description="Kredi kalitesi",
-        ratios=[
-            RatioWeight("npl_ratio", weight=1.0, higher_is_better=False),
-        ]
-    ),
-    
-    PillarConfig(
-        name="sermaye_likidite",
+        name="degerleme",
         weight=0.15,
         min_ratios=1,
-        description="Sermaye yapısı",
+        description="Sermaye yapısı ve likidite",
         ratios=[
             RatioWeight("capital_adequacy", weight=0.60, higher_is_better=True),
             RatioWeight("loan_to_deposit",  weight=0.40, higher_is_better=False),
@@ -175,10 +175,10 @@ SIGORTA_PILLARS: List[PillarConfig] = [
     ),
     
     PillarConfig(
-        name="teknik_performans",
+        name="finansal",
         weight=0.40,
         min_ratios=2,
-        description="Teknik kârlılık",
+        description="Teknik kârlılık ve finansal sağlık",
         ratios=[
             RatioWeight("combined_ratio", weight=0.45, higher_is_better=False),
             RatioWeight("loss_ratio",     weight=0.35, higher_is_better=False),
@@ -206,7 +206,7 @@ GYO_PILLARS: List[PillarConfig] = [
     
     PillarConfig(
         name="karlilik",
-        weight=0.40,
+        weight=0.35,
         min_ratios=2,
         description="Kârlılık performansı",
         ratios=[
@@ -219,7 +219,7 @@ GYO_PILLARS: List[PillarConfig] = [
     
     PillarConfig(
         name="finansal",
-        weight=0.35,
+        weight=0.30,
         min_ratios=1,
         description="Finansal yapı",
         ratios=[
@@ -229,8 +229,18 @@ GYO_PILLARS: List[PillarConfig] = [
     ),
     
     PillarConfig(
+        name="verimlilik",
+        weight=0.15,
+        min_ratios=1,
+        description="Aktif verimliliği",
+        ratios=[
+            RatioWeight("asset_turnover", weight=1.0, higher_is_better=True),
+        ]
+    ),
+    
+    PillarConfig(
         name="degerleme",
-        weight=0.25,
+        weight=0.20,
         min_ratios=1,
         description="Değerleme",
         ratios=[

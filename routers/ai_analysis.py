@@ -52,6 +52,7 @@ class ScoreCard(BaseModel):
     score_karlilik: Optional[float]
     score_finansal: Optional[float]
     score_verimlilik: Optional[float]
+    score_degerleme: Optional[float]
     reliability: Optional[str]
     percentile_sector: Optional[int]
     rank_sector: Optional[int]
@@ -254,7 +255,7 @@ def generate_score_card(db, ticker: str, period_key: str) -> Optional[ScoreCard]
     result = db.execute(text("""
         SELECT 
             cs.score_sektor, cs.score_genel,
-            cs.score_karlilik, cs.score_finansal, cs.score_verimlilik,
+            cs.score_karlilik, cs.score_finansal, cs.score_verimlilik, cs.score_degerleme,
             cs.reliability_sektor, cs.n_peers_sektor,
             c.sector_main
         FROM company_scores cs
@@ -288,6 +289,7 @@ def generate_score_card(db, ticker: str, period_key: str) -> Optional[ScoreCard]
         score_karlilik=float(result.score_karlilik) if result.score_karlilik else None,
         score_finansal=float(result.score_finansal) if result.score_finansal else None,
         score_verimlilik=float(result.score_verimlilik) if result.score_verimlilik else None,
+        score_degerleme=float(result.score_degerleme) if result.score_degerleme else None,
         reliability=result.reliability_sektor,
         percentile_sector=percentile,
         rank_sector=rank,
@@ -392,7 +394,7 @@ def generate_swot_card(db, ticker: str, period_key: str) -> SWOTCard:
     
     # Get company scores
     scores = db.execute(text("""
-        SELECT score_sektor, score_karlilik, score_finansal, score_verimlilik
+        SELECT score_sektor, score_karlilik, score_finansal, score_verimlilik, score_degerleme
         FROM company_scores
         WHERE ticker = :ticker AND period_key = :period_key
     """), {"ticker": ticker, "period_key": period_key}).fetchone()
@@ -1031,3 +1033,62 @@ async def get_swot_analysis(
         """), {"ticker": ticker.upper()}).scalar()
     
     return generate_swot_card(db, ticker.upper(), period_key)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CEO-LEVEL FUNDAMENTAL REPORT (No tier restrictions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FundamentalReportResponse(BaseModel):
+    """CEO-Level Fundamental Analysis Report Response"""
+    ticker: str
+    company_name: str
+    sector: str
+    period_key: str
+    executive_summary: str
+    financial_health: Dict[str, Any]
+    profitability: Dict[str, Any]
+    sector_comparison: Dict[str, Any]
+    swot: Dict[str, Any]
+    scenarios: Dict[str, Any]
+    watchlist: List[Dict[str, str]]
+    computed_at: datetime
+    disclaimer: str
+
+
+@router.get("/fundamental-report/{ticker}", response_model=FundamentalReportResponse)
+async def get_fundamental_report(
+    ticker: str,
+    period_key: Optional[str] = Query(None, description="Period key (default: latest)"),
+    db: Session = Depends(get_db),
+):
+    """
+    CEO-level fundamental analysis report for all members.
+    
+    No tier restrictions — all authenticated users get full access.
+    Includes: Executive Summary, Financial Health, Profitability,
+    Sector Comparison, SWOT, Scenarios, Watchlist.
+    """
+    from services.fundamental_report import FundamentalReportService
+    
+    service = FundamentalReportService(db)
+    report = service.generate(ticker.upper(), period_key)
+    
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Fundamental report for {ticker} not found or insufficient data.")
+    
+    return FundamentalReportResponse(
+        ticker=report.ticker,
+        company_name=report.company_name,
+        sector=report.sector,
+        period_key=report.period_key,
+        executive_summary=report.executive_summary,
+        financial_health=report.financial_health,
+        profitability=report.profitability,
+        sector_comparison=report.sector_comparison,
+        swot=report.swot,
+        scenarios=report.scenarios,
+        watchlist=report.watchlist,
+        computed_at=report.computed_at,
+        disclaimer=report.disclaimer,
+    )
