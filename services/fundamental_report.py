@@ -248,7 +248,6 @@ class FundamentalReportService:
             SELECT
                 c.sector_main,
                 cs.score_sektor,
-                cs.n_peers_sektor,
                 RANK() OVER (
                     PARTITION BY c.sector_main
                     ORDER BY cs.score_sektor DESC NULLS LAST
@@ -260,6 +259,14 @@ class FundamentalReportService:
 
         if not row:
             return None
+
+        # Get real sector company count (only same sector)
+        sector_count = self.db.execute(text("""
+            SELECT COUNT(DISTINCT cs.ticker) as cnt
+            FROM company_scores cs
+            JOIN companies c ON cs.ticker = c.ticker
+            WHERE c.sector_main = :sector AND cs.period_key = :period_key
+        """), {"sector": row.sector_main, "period_key": period_key}).scalar() or 1
 
         # Get above/below median ratios
         ratio_perf = self.db.execute(text("""
@@ -279,7 +286,7 @@ class FundamentalReportService:
 
         return {
             "sector_name": row.sector_main,
-            "total_companies": row.n_peers_sektor or 1,
+            "total_companies": sector_count,
             "rank": int(row.sector_rank) if row.sector_rank else 1,
             "percentile": float(row.score_sektor) if row.score_sektor else 50.0,
             "above_median_ratios": above,
