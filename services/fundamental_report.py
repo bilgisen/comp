@@ -271,7 +271,7 @@ class FundamentalReportService:
                 ON sb.ratio_code = cr.ratio_code
                 AND sb.sector_main = :sector
                 AND sb.period_key = cr.period_key
-            WHERE cr.ticker = :ticker AND cr.period_key = period_key
+            WHERE cr.ticker = :ticker AND cr.period_key = :period_key
         """), {"ticker": ticker, "sector": row.sector_main, "period_key": period_key}).fetchall()
 
         above = [r.ratio_code for r in ratio_perf if r.position == 'above']
