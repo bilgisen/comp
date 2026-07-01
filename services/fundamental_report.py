@@ -577,7 +577,8 @@ class FundamentalReportService:
     def _build_profitability(self, ratio_cards, score_card) -> Dict[str, Any]:
         """Build profitability analysis section."""
         prof_ratios = [r for r in ratio_cards if r["ratio_code"] in [
-            "roe", "roa", "gross_margin", "net_margin", "operating_margin", "ebitda_margin"
+            "roe", "roa", "gross_margin", "net_margin", "operating_margin", "ebitda_margin",
+            "cost_income_ratio", "net_interest_margin"
         ]]
 
         karlilik_val = score_card.get("score_karlilik") if score_card else None
@@ -587,7 +588,9 @@ class FundamentalReportService:
             val = r.get("company_value")
             if val is not None:
                 # Format as percentage for margin ratios
-                if r["ratio_code"] in ["roe", "roa", "gross_margin", "net_margin", "operating_margin", "ebitda_margin"]:
+                if r["ratio_code"] in ["roe", "roa", "gross_margin", "net_margin", "operating_margin", "ebitda_margin", "net_interest_margin"]:
+                    display_val = f"%{val*100:.1f}"
+                elif r["ratio_code"] == "cost_income_ratio":
                     display_val = f"%{val*100:.1f}"
                 else:
                     display_val = f"{val:.2f}"
