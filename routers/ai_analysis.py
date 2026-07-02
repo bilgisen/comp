@@ -996,20 +996,43 @@ async def get_tiered_analysis(
                     below_median_ratios=[]
                 )
             )
+    elif tier == UserTier.MEMBER:
+        # Fallback for insufficient data
+        summary = AnalysisSummary(
+            summary=f"{company.name} ({ticker.upper()}) için temel analiz verileri henüz yeterli değil. Lütfen daha sonra tekrar deneyin.",
+            key_strengths=["Veri bekleniyor"],
+            key_concerns=["Henüz hesaplanmadı"],
+            investment_thesis=None
+        )
     
-    elif tier == UserTier.SUBSCRIBER and score_card and ratio_cards and swot_card:
-        sector_pos = generate_sector_position_card(db, ticker.upper(), period_key)
-        detailed_report = await generate_subscriber_report(
+    elif tier == UserTier.SUBSCRIBER and score_card and ratio_cards:
+        # Subscribers get both summary and detailed report
+        summary = await generate_member_summary(
             ticker.upper(), company.name, company.sector_main,
-            score_card, ratio_cards, swot_card,
-            sector_pos or SectorPositionCard(
-                sector_name=company.sector_main,
-                total_companies=1,
-                rank=1,
-                percentile=50.0,
-                above_median_ratios=[],
-                below_median_ratios=[]
+            score_card, ratio_cards
+        )
+        
+        if swot_card:
+            sector_pos = generate_sector_position_card(db, ticker.upper(), period_key)
+            detailed_report = await generate_subscriber_report(
+                ticker.upper(), company.name, company.sector_main,
+                score_card, ratio_cards, swot_card,
+                sector_pos or SectorPositionCard(
+                    sector_name=company.sector_main,
+                    total_companies=1,
+                    rank=1,
+                    percentile=50.0,
+                    above_median_ratios=[],
+                    below_median_ratios=[]
+                )
             )
+    elif tier == UserTier.SUBSCRIBER:
+        # Fallback for insufficient data
+        summary = AnalysisSummary(
+            summary=f"{company.name} ({ticker.upper()}) için temel analiz verileri henüz yeterli değil.",
+            key_strengths=["Veri bekleniyor"],
+            key_concerns=["Henüz hesaplanmadı"],
+            investment_thesis=None
         )
     
     return TieredAnalysisResponse(
