@@ -266,22 +266,32 @@ def generate_score_card(db, ticker: str, period_key: str) -> Optional[ScoreCard]
     if not result:
         return None
     
-    # Calculate rank and percentile
+    # Calculate rank using RANK() window function (consistent with leaderboard)
     rank_result = db.execute(text("""
-        SELECT COUNT(*) + 1 as rank
-        FROM company_scores cs
-        JOIN companies c ON cs.ticker = c.ticker
-        WHERE c.sector_main = :sector
-          AND cs.period_key = :period_key
-          AND cs.score_sektor > :score
+        SELECT sector_rank, total_companies
+        FROM (
+            SELECT
+                cs.ticker,
+                RANK() OVER (
+                    PARTITION BY c.sector_main
+                    ORDER BY cs.score_sektor DESC NULLS LAST
+                ) as sector_rank,
+                COUNT(*) OVER (PARTITION BY c.sector_main) as total_companies
+            FROM company_scores cs
+            JOIN companies c ON cs.ticker = c.ticker
+            WHERE c.sector_main = :sector
+              AND cs.period_key = :period_key
+        ) ranked
+        WHERE ticker = :ticker
     """), {
         "sector": result.sector_main,
         "period_key": period_key,
-        "score": result.score_sektor or 0
+        "ticker": ticker,
     }).fetchone()
     
-    rank = rank_result.rank if rank_result else 1
-    percentile = int(100 - (rank / max(result.n_peers_sektor or 1, 1)) * 100)
+    rank = rank_result.sector_rank if rank_result else 1
+    total = rank_result.total_companies if rank_result else 1
+    percentile = int(100 - (rank / max(total, 1)) * 100)
     
     return ScoreCard(
         score_sektor=float(result.score_sektor) if result.score_sektor else None,
@@ -293,7 +303,7 @@ def generate_score_card(db, ticker: str, period_key: str) -> Optional[ScoreCard]
         reliability=result.reliability_sektor,
         percentile_sector=percentile,
         rank_sector=rank,
-        total_peers=result.n_peers_sektor
+        total_peers=total
     )
 
 
@@ -572,17 +582,23 @@ def generate_sector_position_card(db, ticker: str, period_key: str) -> Optional[
     """Generate sector position card"""
     
     result = db.execute(text("""
-        SELECT 
-            c.sector_main,
-            cs.score_sektor,
-            cs.n_peers_sektor,
-            RANK() OVER (
-                PARTITION BY c.sector_main 
-                ORDER BY cs.score_sektor DESC NULLS LAST
-            ) as sector_rank
-        FROM company_scores cs
-        JOIN companies c ON cs.ticker = c.ticker
-        WHERE cs.ticker = :ticker AND cs.period_key = :period_key
+        SELECT sector_name, score_sektor, sector_rank, total_companies
+        FROM (
+            SELECT
+                c.sector_main as sector_name,
+                cs.score_sektor,
+                RANK() OVER (
+                    PARTITION BY c.sector_main
+                    ORDER BY cs.score_sektor DESC NULLS LAST
+                ) as sector_rank,
+                COUNT(*) OVER (PARTITION BY c.sector_main) as total_companies,
+                cs.ticker
+            FROM company_scores cs
+            JOIN companies c ON cs.ticker = c.ticker
+            WHERE cs.period_key = :period_key
+              AND cs.score_sektor IS NOT NULL
+        ) ranked
+        WHERE ticker = :ticker
     """), {"ticker": ticker, "period_key": period_key}).fetchone()
     
     if not result:
@@ -604,11 +620,15 @@ def generate_sector_position_card(db, ticker: str, period_key: str) -> Optional[
     above_median = [r.ratio_code for r in ratio_perf if r.position == 'above']
     below_median = [r.ratio_code for r in ratio_perf if r.position == 'below']
     
+    rank = int(result.sector_rank) if result.sector_rank else 1
+    total = int(result.total_companies) if result.total_companies else 1
+    percentile = int(100 - (rank / max(total, 1)) * 100)
+
     return SectorPositionCard(
-        sector_name=result.sector_main,
-        total_companies=result.n_peers_sektor or 1,
-        rank=int(result.sector_rank) if result.sector_rank else 1,
-        percentile=float(result.score_sektor) if result.score_sektor else 50.0,
+        sector_name=result.sector_name,
+        total_companies=total,
+        rank=rank,
+        percentile=percentile,
         above_median_ratios=above_median,
         below_median_ratios=below_median
     )

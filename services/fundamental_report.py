@@ -138,22 +138,32 @@ class FundamentalReportService:
         if not row:
             return None
 
-        # Calculate rank
+        # Calculate rank using RANK() window function (consistent with leaderboard)
         rank_row = self.db.execute(text("""
-            SELECT COUNT(*) + 1 as rank
-            FROM company_scores cs
-            JOIN companies c ON cs.ticker = c.ticker
-            WHERE c.sector_main = :sector
-              AND cs.period_key = :period_key
-              AND cs.score_sektor > :score
+            SELECT sector_rank, total_companies
+            FROM (
+                SELECT
+                    cs.ticker,
+                    RANK() OVER (
+                        PARTITION BY c.sector_main
+                        ORDER BY cs.score_sektor DESC NULLS LAST
+                    ) as sector_rank,
+                    COUNT(*) OVER (PARTITION BY c.sector_main) as total_companies
+                FROM company_scores cs
+                JOIN companies c ON cs.ticker = c.ticker
+                WHERE c.sector_main = :sector
+                  AND cs.period_key = :period_key
+            ) ranked
+            WHERE ticker = :ticker
         """), {
             "sector": row.sector_main,
             "period_key": period_key,
-            "score": row.score_sektor or 0
+            "ticker": ticker,
         }).fetchone()
 
-        rank = rank_row.rank if rank_row else 1
-        percentile = int(100 - (rank / max(row.n_peers_sektor or 1, 1)) * 100)
+        rank = rank_row.sector_rank if rank_row else 1
+        total = rank_row.total_companies if rank_row else 1
+        percentile = int(100 - (rank / max(total, 1)) * 100)
 
         return {
             "score_sektor": float(row.score_sektor) if row.score_sektor else None,
@@ -165,7 +175,7 @@ class FundamentalReportService:
             "reliability": row.reliability_sektor,
             "percentile_sector": percentile,
             "rank_sector": rank,
-            "total_peers": row.n_peers_sektor,
+            "total_peers": total,
         }
 
     def _get_ratio_comparisons(self, ticker: str, period_key: str) -> List[Dict]:
@@ -245,28 +255,27 @@ class FundamentalReportService:
     def _get_sector_position(self, ticker: str, period_key: str) -> Optional[Dict]:
         """Get sector ranking and position."""
         row = self.db.execute(text("""
-            SELECT
-                c.sector_main,
-                cs.score_sektor,
-                RANK() OVER (
-                    PARTITION BY c.sector_main
-                    ORDER BY cs.score_sektor DESC NULLS LAST
-                ) as sector_rank
-            FROM company_scores cs
-            JOIN companies c ON cs.ticker = c.ticker
-            WHERE cs.ticker = :ticker AND cs.period_key = :period_key
+            SELECT sector_main, score_sektor, sector_rank, total_companies
+            FROM (
+                SELECT
+                    c.sector_main,
+                    cs.score_sektor,
+                    RANK() OVER (
+                        PARTITION BY c.sector_main
+                        ORDER BY cs.score_sektor DESC NULLS LAST
+                    ) as sector_rank,
+                    COUNT(*) OVER (PARTITION BY c.sector_main) as total_companies,
+                    cs.ticker
+                FROM company_scores cs
+                JOIN companies c ON cs.ticker = c.ticker
+                WHERE cs.period_key = :period_key
+                  AND cs.score_sektor IS NOT NULL
+            ) ranked
+            WHERE ticker = :ticker
         """), {"ticker": ticker, "period_key": period_key}).fetchone()
 
         if not row:
             return None
-
-        # Get real sector company count (only same sector)
-        sector_count = self.db.execute(text("""
-            SELECT COUNT(DISTINCT cs.ticker) as cnt
-            FROM company_scores cs
-            JOIN companies c ON cs.ticker = c.ticker
-            WHERE c.sector_main = :sector AND cs.period_key = :period_key
-        """), {"sector": row.sector_main, "period_key": period_key}).scalar() or 1
 
         # Get above/below median ratios
         ratio_perf = self.db.execute(text("""
@@ -284,11 +293,15 @@ class FundamentalReportService:
         above = [r.ratio_code for r in ratio_perf if r.position == 'above']
         below = [r.ratio_code for r in ratio_perf if r.position == 'below']
 
+        rank = int(row.sector_rank) if row.sector_rank else 1
+        total = int(row.total_companies) if row.total_companies else 1
+        percentile = int(100 - (rank / max(total, 1)) * 100)
+
         return {
             "sector_name": row.sector_main,
-            "total_companies": sector_count,
-            "rank": int(row.sector_rank) if row.sector_rank else 1,
-            "percentile": float(row.score_sektor) if row.score_sektor else 50.0,
+            "total_companies": total,
+            "rank": rank,
+            "percentile": percentile,
             "above_median_ratios": above,
             "below_median_ratios": below,
         }
