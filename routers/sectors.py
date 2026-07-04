@@ -44,14 +44,16 @@ async def list_industries(db: AsyncSession = Depends(get_async_db)):
         if not latest_period:
             latest_period = "2026Q1"  # Default fallback
         
-        # Count companies WITH scores per industry
+        # Count companies per industry (with or without scores)
         query_text = text("""
             SELECT 
                 c.industry,
-                COUNT(DISTINCT cs.ticker) as company_count,
-                COUNT(DISTINCT CASE WHEN cs.is_stale = FALSE THEN cs.ticker END) as active_count
+                COUNT(DISTINCT c.ticker) as company_count,
+                COUNT(DISTINCT cs.ticker) as scored_count
             FROM companies c
-            LEFT JOIN company_scores cs ON c.ticker = cs.ticker AND cs.period_key = :period
+            LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
+                AND cs.period_key = :period 
+                AND cs.is_stale = FALSE
             WHERE c.is_active = TRUE 
               AND c.industry IS NOT NULL
             GROUP BY c.industry
@@ -73,9 +75,9 @@ async def list_industries(db: AsyncSession = Depends(get_async_db)):
             
             industry_list.append({
                 "name": ind.industry,
-                "slug": ind.industry.lower().replace(" ", "-").replace("&", "and"),
+                "slug": ind.industry.lower().replace(" ", "-").replace("&", "and").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c").replace("İ", "i"),
                 "total_companies": count,
-                "active_companies": ind.active_count or count,
+                "active_companies": ind.scored_count or 0,  # Companies with scores
                 "reliability": reliability,
                 "min_peers_for_benchmark": 3
             })
