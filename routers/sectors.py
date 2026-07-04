@@ -22,15 +22,52 @@ router = APIRouter()
 
 @router.get("/")
 async def list_sectors(db: AsyncSession = Depends(get_async_db)):
-    """List all available sectors with company counts"""
+    """List all available sectors with company counts (only companies with scores)"""
     try:
-        query = select(
-            Company.sector_main,
-            func.count(Company.id).label("company_count"),
-            func.count(Company.id).filter(Company.is_active == True).label("active_companies")
-        ).group_by(Company.sector_main)
+        from sqlalchemy import text
         
-        result = await db.execute(query)
+        # Get latest period
+        latest_period_result = await db.execute(
+            text("SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE")
+        )
+        latest_period = latest_period_result.scalar()
+        
+        if not latest_period:
+            # Fallback to all companies if no scores exist
+            query = select(
+                Company.sector_main,
+                func.count(Company.id).label("company_count"),
+                func.count(Company.id).filter(Company.is_active == True).label("active_companies")
+            ).group_by(Company.sector_main)
+            
+            result = await db.execute(query)
+            sectors = result.all()
+            
+            return {
+                "sectors": [
+                    {
+                        "name": sector.sector_main,
+                        "total_companies": sector.company_count,
+                        "active_companies": sector.active_companies
+                    }
+                    for sector in sectors
+                ],
+                "total_sectors": len(sectors)
+            }
+        
+        # Count companies WITH scores per sector
+        query_text = text("""
+            SELECT 
+                c.sector_main,
+                COUNT(DISTINCT cs.ticker) as company_count
+            FROM company_scores cs
+            JOIN companies c ON cs.ticker = c.ticker
+            WHERE cs.period_key = :period AND cs.is_stale = FALSE
+            GROUP BY c.sector_main
+            ORDER BY c.sector_main
+        """)
+        
+        result = await db.execute(query_text, {"period": latest_period})
         sectors = result.all()
         
         return {
@@ -38,11 +75,12 @@ async def list_sectors(db: AsyncSession = Depends(get_async_db)):
                 {
                     "name": sector.sector_main,
                     "total_companies": sector.company_count,
-                    "active_companies": sector.active_companies
+                    "active_companies": sector.company_count  # Same as total since we only count scored companies
                 }
                 for sector in sectors
             ],
-            "total_sectors": len(sectors)
+            "total_sectors": len(sectors),
+            "period": latest_period
         }
         
     except Exception as e:
