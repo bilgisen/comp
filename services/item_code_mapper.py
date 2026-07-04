@@ -37,14 +37,20 @@ class ItemCodeMapper:
         "2L": "provisions",                     # Karşılıklar
         "2M": "tax_liabilities",                # Vergi yükümlülükleri
         "2NBA": "subordinated_debt",            # Sermaye benzeri krediler
-        "2O": "shareholders_equity",            # Özkaynaklar
+        "2O": "shareholders_equity",            # Özkaynaklar (can be used as tier1_capital approximation)
         "2OV": "period_net_income",             # Dönem net karı (bilanço)
         "2OVA": "minority_interests",           # Azınlık payları
+        
+        # Approximations for missing banking ratios
+        # Note: True tier1_capital and risk_weighted_assets not directly available in basic statements
+        # These would require regulatory reports (BDDK filings)
+        "1Z": "total_assets_approx",            # Can approximate interest_earning_assets
+        "2N": "total_equity",                   # Alternative equity measure
         
         # INCOME STATEMENT
         "3A": "interest_income",                # Faiz gelirleri
         "3B": "interest_expense",               # Faiz giderleri
-        "3C": "net_interest_income",            # Net faiz geliri
+        "3C": "net_interest_income",            # Net faiz geliri (for net_interest_margin ratio)
         "3CA": "net_commission_income",         # Net ücret ve komisyon geliri
         "3CAA": "commission_income",            # Alınan komisyonlar
         "3CAD": "commission_expense",           # Verilen komisyonlar
@@ -53,8 +59,9 @@ class ItemCodeMapper:
         "3CD": "other_operating_income",        # Diğer faaliyet gelirleri
         "3CE": "total_operating_income",        # Toplam faaliyet geliri
         "3CF": "provision_expense",             # Kredi ve diğer karşılıklar
-        "3CG": "operating_expenses",            # Faaliyet giderleri
+        "3CG": "operating_expenses",            # Faaliyet giderleri (for cost_income_ratio)
         "3CH": "operating_profit",              # Net faaliyet kârı (PPOP benzeri)
+        "3CE": "total_operating_income",        # Toplam faaliyet geliri (for cost_income_ratio)
         "3CL": "profit_before_tax",             # Vergi öncesi kâr
         "3CM": "tax_expense",                   # Vergi karşılığı
         "3CN": "continuing_operations_income",  # Sürdürülen faaliyetler net kârı
@@ -67,7 +74,7 @@ class ItemCodeMapper:
         "3BA": "net_claims_incurred",           # Gerçekleşen Hasarlar (Reasürör Payı Düşülmüş Olarak)
         "3BAA": "claims_paid",                  # Ödenen Hasarlar (Reasürör Payı Düşülmüş Olarak)
         "3BAB": "outstanding_claims_change",    # Muallak Hasarlar Karşılığı Değişimi
-        "3BD": "operating_expenses",            # Faaliyet Giderleri (Sigorta)
+        "3BD": "insurance_operating_expenses",  # Faaliyet Giderleri (Sigorta) - RENAMED to avoid conflict with banking 3CG
         "3NJD": "net_income",                   # Dönem Net Kar veya Zararı
     }
     

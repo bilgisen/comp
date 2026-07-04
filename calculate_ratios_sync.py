@@ -193,9 +193,9 @@ class SyncRatioCalculator:
     BANKING_RATIOS = {
         "net_interest_margin": RatioConfig(
             code="net_interest_margin",
-            formula=lambda d: d.get("net_interest_income_ttm") / d.get("interest_earning_assets_avg") if d.get("net_interest_income_ttm") is not None and d.get("interest_earning_assets_avg") is not None and d.get("interest_earning_assets_avg") != 0 else None,
+            formula=lambda d: d.get("net_interest_income_ttm") / d.get("total_assets_avg") if d.get("net_interest_income_ttm") is not None and d.get("total_assets_avg") is not None and d.get("total_assets_avg") != 0 else None,
             type="ttm",
-            description="Net Faiz Marjı = Net Faiz Geliri (TTM) / Ortalama Faiz Getirili Aktifler",
+            description="Net Faiz Marjı = Net Faiz Geliri (TTM) / Ortalama Toplam Aktifler (approximation)",
             category="profitability"
         ),
         
@@ -217,9 +217,9 @@ class SyncRatioCalculator:
         
         "capital_adequacy": RatioConfig(
             code="capital_adequacy",
-            formula=lambda d: d.get("tier1_capital") / d.get("risk_weighted_assets") if d.get("tier1_capital") is not None and d.get("risk_weighted_assets") is not None and d.get("risk_weighted_assets") != 0 else None,
+            formula=lambda d: None,  # Disabled: requires regulatory data
             type="instant",
-            description="Sermaye Yeterlilik Oranı = Tier 1 Sermaye / Risk Ağırlıklı Aktifler",
+            description="Sermaye Yeterlilik Oranı (NOT AVAILABLE)",
             category="capital"
         ),
         
