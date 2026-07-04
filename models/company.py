@@ -20,9 +20,10 @@ class Company(Base):
     name = Column(String(255), nullable=False)
     name_en = Column(String(255), nullable=True)
     
-    # Sector classification
-    sector_raw = Column(String(100), nullable=True)      # İş Yatırım'dan gelen orijinal
-    sector_main = Column(String(50), nullable=False, index=True)  # 14 ana sektörden biri
+    # Sector classification (3-tier hierarchy)
+    sector_raw = Column(String(100), nullable=True)      # İş Yatırım'dan gelen orijinal (53 sektör)
+    sector_main = Column(String(50), nullable=False, index=True)  # 14 ana sektör (legacy - geniş kategoriler)
+    industry = Column(String(100), nullable=True, index=True)  # 21-28 industry (peer comparison için ideal)
     
     # Financial metadata
     financial_group = Column(String(20), nullable=False, index=True)  # UFRS_K, XI_29, etc.

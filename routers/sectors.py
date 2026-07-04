@@ -1,5 +1,10 @@
 """
-Sector analysis API endpoints
+Sector/Industry analysis API endpoints
+
+IMPORTANT: This module supports both legacy sector_main (14 sectors) 
+and new industry classification (21-28 industries) for backward compatibility.
+
+New endpoints use /industries/ prefix, legacy endpoints use /sectors/
 """
 
 import logging
@@ -9,7 +14,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from core.database import get_db, get_async_db
 from models.company import Company
@@ -20,12 +25,175 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ==================== NEW INDUSTRY ENDPOINTS ====================
+
+@router.get("/industries")
+async def list_industries(db: AsyncSession = Depends(get_async_db)):
+    """
+    List all industries with company counts and reliability ratings
+    
+    Returns 21-28 industries for better peer comparisons
+    """
+    try:
+        # Get latest period
+        latest_period_result = await db.execute(
+            text("SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE")
+        )
+        latest_period = latest_period_result.scalar()
+        
+        if not latest_period:
+            latest_period = "2026Q1"  # Default fallback
+        
+        # Count companies WITH scores per industry
+        query_text = text("""
+            SELECT 
+                c.industry,
+                COUNT(DISTINCT cs.ticker) as company_count,
+                COUNT(DISTINCT CASE WHEN cs.is_stale = FALSE THEN cs.ticker END) as active_count
+            FROM companies c
+            LEFT JOIN company_scores cs ON c.ticker = cs.ticker AND cs.period_key = :period
+            WHERE c.is_active = TRUE 
+              AND c.industry IS NOT NULL
+            GROUP BY c.industry
+            ORDER BY company_count DESC
+        """)
+        
+        result = await db.execute(query_text, {"period": latest_period})
+        industries = result.all()
+        
+        # Classify reliability
+        industry_list = []
+        for ind in industries:
+            count = ind.company_count
+            reliability = (
+                "HIGH" if count >= 10 else
+                "MEDIUM" if count >= 5 else
+                "LOW"
+            )
+            
+            industry_list.append({
+                "name": ind.industry,
+                "slug": ind.industry.lower().replace(" ", "-").replace("&", "and"),
+                "total_companies": count,
+                "active_companies": ind.active_count or count,
+                "reliability": reliability,
+                "min_peers_for_benchmark": 3
+            })
+        
+        return {
+            "industries": industry_list,
+            "total_industries": len(industry_list),
+            "high_quality_count": sum(1 for i in industry_list if i["reliability"] == "HIGH"),
+            "period": latest_period,
+            "system": "industry"  # Indicates this is the new system
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing industries: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/industries/{industry}")
+async def get_industry_detail(
+    industry: str,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Get detailed information about an industry"""
+    try:
+        # Decode URL-encoded industry name
+        industry_name = industry.replace("-", " ").replace("and", "&").title()
+        
+        # Get company count and list
+        query_text = text("""
+            SELECT 
+                c.ticker,
+                c.name,
+                c.market_cap,
+                c.city,
+                cs.total_score,
+                cs.percentile
+            FROM companies c
+            LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
+                AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
+            WHERE c.industry = :industry 
+              AND c.is_active = TRUE
+            ORDER BY cs.total_score DESC NULLS LAST
+        """)
+        
+        result = await db.execute(query_text, {"industry": industry_name})
+        companies = result.all()
+        
+        if not companies:
+            raise HTTPException(status_code=404, detail=f"Industry '{industry}' not found")
+        
+        return {
+            "industry": industry_name,
+            "slug": industry,
+            "total_companies": len(companies),
+            "companies": [
+                {
+                    "ticker": c.ticker,
+                    "name": c.name,
+                    "market_cap": c.market_cap,
+                    "city": c.city,
+                    "score": float(c.total_score) if c.total_score else None,
+                    "percentile": float(c.percentile) if c.percentile else None
+                }
+                for c in companies
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting industry detail for {industry}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/industries/{industry}/benchmarks")
+async def get_industry_benchmarks(
+    industry: str,
+    period: Optional[str] = Query(None, description="Period key (e.g., 2026Q1)"),
+    ratios: Optional[List[str]] = Query(None, description="Specific ratio codes"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Get benchmark data for an industry"""
+    try:
+        from services.sector_benchmarks import SectorBenchmarkService
+        
+        # Decode URL-encoded industry name
+        industry_name = industry.replace("-", " ").replace("and", "&").title()
+        
+        benchmark_service = SectorBenchmarkService(db)
+        benchmarks = await benchmark_service.get_sector_benchmarks(
+            sector_main=industry_name,  # Note: DB column is still sector_main
+            period_key=period,
+            ratio_codes=ratios
+        )
+        
+        return {
+            "industry": industry_name,
+            "slug": industry,
+            "period": period or benchmarks.get("period_key"),
+            "benchmarks": benchmarks,
+            "generated_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting benchmarks for industry {industry}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ==================== LEGACY SECTOR ENDPOINTS (BACKWARD COMPATIBILITY) ====================
+
 @router.get("/")
 async def list_sectors(db: AsyncSession = Depends(get_async_db)):
-    """List all available sectors with company counts (only companies with scores)"""
+    """
+    LEGACY: List all available sectors (14 broad categories)
+    
+    For new implementations, use /industries endpoint instead
+    """
     try:
-        from sqlalchemy import text
-        
         # Get latest period
         latest_period_result = await db.execute(
             text("SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE")
@@ -52,7 +220,8 @@ async def list_sectors(db: AsyncSession = Depends(get_async_db)):
                     }
                     for sector in sectors
                 ],
-                "total_sectors": len(sectors)
+                "total_sectors": len(sectors),
+                "system": "legacy"
             }
         
         # Count companies WITH scores per sector
@@ -75,16 +244,18 @@ async def list_sectors(db: AsyncSession = Depends(get_async_db)):
                 {
                     "name": sector.sector_main,
                     "total_companies": sector.company_count,
-                    "active_companies": sector.company_count  # Same as total since we only count scored companies
+                    "active_companies": sector.company_count
                 }
                 for sector in sectors
             ],
             "total_sectors": len(sectors),
-            "period": latest_period
+            "period": latest_period,
+            "system": "legacy",
+            "note": "Use /industries endpoint for better peer comparisons"
         }
         
     except Exception as e:
-        logger.error(f"❌ Error listing sectors: {e}", exc_info=True)
+        logger.error(f"Error listing sectors: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -151,4 +322,73 @@ async def get_sector_companies(
         
     except Exception as e:
         logger.error(f"❌ Error getting companies for {sector}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{sector}/benchmarks")
+async def get_sector_benchmarks(
+    sector: str,
+    period: Optional[str] = Query(None, description="Period key"),
+    ratios: Optional[List[str]] = Query(None, description="Specific ratios"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """LEGACY: Get sector benchmark data (use /industries/{industry}/benchmarks instead)"""
+    try:
+        from services.sector_benchmarks import SectorBenchmarkService
+        
+        benchmark_service = SectorBenchmarkService(db)
+        benchmarks = await benchmark_service.get_sector_benchmarks(
+            sector_main=sector,
+            period_key=period,
+            ratio_codes=ratios
+        )
+        
+        return {
+            "sector": sector,
+            "period": period,
+            "benchmarks": benchmarks,
+            "generated_at": datetime.utcnow().isoformat(),
+            "system": "legacy"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting benchmarks for {sector}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{sector}/companies")
+async def get_sector_companies(
+    sector: str,
+    active_only: bool = Query(True, description="Only active companies"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """LEGACY: Get companies in a sector (use /industries/{industry} instead)"""
+    try:
+        query = select(Company).where(Company.sector_main == sector)
+        
+        if active_only:
+            query = query.where(Company.is_active == True)
+        
+        result = await db.execute(query.order_by(Company.name))
+        companies = result.scalars().all()
+        
+        return {
+            "sector": sector,
+            "companies": [
+                {
+                    "ticker": company.ticker,
+                    "name": company.name,
+                    "city": company.city,
+                    "financial_group": company.financial_group,
+                    "industry": company.industry,  # Show new industry field
+                    "is_active": company.is_active
+                }
+                for company in companies
+            ],
+            "count": len(companies),
+            "system": "legacy"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting companies for {sector}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

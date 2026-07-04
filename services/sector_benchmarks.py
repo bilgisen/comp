@@ -213,49 +213,63 @@ class SectorBenchmarkService:
 
     async def compute_sector_benchmarks(
         self, 
-        sector_main: str, 
-        period_key: str,
+        sector_main: str = None,  # Legacy support
+        industry: str = None,  # New field - preferred
+        period_key: str = None,
         ratio_codes: Optional[List[str]] = None
     ) -> List[BenchmarkResult]:
         """
         Compute sector benchmarks using F1-F5 filter pipeline
         
+        Args:
+            sector_main: Legacy 14-sector system (for backward compatibility)
+            industry: New 21-28 industry system (preferred for peer comparisons)
+            period_key: Period to calculate (e.g., "2026Q1")
+            ratio_codes: Specific ratios to calculate
+        
         This is the core calculation engine triggered when company data updates
         """
+        # Prefer industry over sector_main
+        sector_field = "industry" if industry else "sector_main"
+        sector_value = industry or sector_main
+        
+        if not sector_value:
+            raise ValueError("Either sector_main or industry must be provided")
+        
         try:
-            logger.info(f"🧮 Computing benchmarks: {sector_main} {period_key}")
+            logger.info(f"🧮 Computing benchmarks: {sector_value} ({sector_field}) {period_key}")
             
             # Get all ratios for this sector/period
             if not ratio_codes:
-                ratio_codes = await self._get_available_ratios(sector_main, period_key)
+                ratio_codes = await self._get_available_ratios(sector_value, period_key, sector_field)
             
             results = []
             
             for ratio_code in ratio_codes:
                 try:
                     # Get peer data for this ratio
-                    peers = await self._get_peer_data(sector_main, ratio_code, period_key)
+                    peers = await self._get_peer_data(sector_value, ratio_code, period_key, sector_field)
                     
                     if not peers:
-                        logger.warning(f"⚠️ No peer data: {sector_main} {ratio_code}")
+                        logger.warning(f"⚠️ No peer data: {sector_value} {ratio_code}")
                         continue
                     
                     # Run F1-F5 filter pipeline
                     filter_result = self._run_filter_pipeline(
-                        peers, ratio_code, sector_main
+                        peers, ratio_code, sector_value
                     )
                     
                     if not filter_result.can_compute:
                         logger.info(f"📊 Insufficient peers for {ratio_code}: n={filter_result.n_peers}")
                         # Save with insufficient data flag
                         await self._save_insufficient_benchmark(
-                            sector_main, ratio_code, period_key, filter_result
+                            sector_value, ratio_code, period_key, filter_result
                         )
                         continue
                     
                     # Calculate benchmarks
                     benchmark = await self._calculate_benchmarks(
-                        filter_result, sector_main, ratio_code, period_key
+                        filter_result, sector_value, ratio_code, period_key
                     )
                     
                     # Save to database
@@ -272,7 +286,7 @@ class SectorBenchmarkService:
             logger.info(f"✅ Benchmarks computed: {len(results)}/{len(ratio_codes)} ratios")
             
             # Invalidate cache
-            await self._invalidate_cache(sector_main, period_key)
+            await self._invalidate_cache(sector_value, period_key)
             
             return results
             
@@ -282,31 +296,68 @@ class SectorBenchmarkService:
 
     async def _get_peer_data(
         self, 
-        sector_main: str, 
+        sector_value: str,  # industry or sector_main value
         ratio_code: str, 
-        period_key: str
+        period_key: str,
+        sector_field: str = "industry"  # "industry" or "sector_main"
     ) -> List[Dict[str, Any]]:
-        """Get peer company data for ratio calculation with financial_group filtering"""
+        """Get peer company data with smart sub-sector filtering"""
         
-        # Determine if this ratio should only compare actual banks (UFRS_K)
-        # Banking-specific ratios AND profitability ratios in banking sector
-        banking_only_ratios = [
-            'net_interest_margin', 'loan_to_deposit', 'npl_ratio', 
-            'capital_adequacy', 'cost_income_ratio',
-            'roa', 'roe'  # Profitability ratios should also only compare banks
-        ]
-        is_banking_only = ratio_code in banking_only_ratios
+        # Define industry-level groupings within broad sectors
+        # This ensures apples-to-apples comparisons
+        INDUSTRY_GROUPINGS = {
+            "Bankacılık": {  # Industry level (NOT sector_main)
+                # Banking-specific ratios only compare actual banks
+                "banking_ratios": ['net_interest_margin', 'loan_to_deposit', 'npl_ratio', 
+                                 'capital_adequacy', 'cost_income_ratio'],
+                # Profitability/efficiency ratios also only compare banks
+                "bank_only_ratios": ['roa', 'roe', 'net_margin', 'operating_margin', 
+                                    'ebitda_margin', 'asset_turnover', 'net_interest_margin'],
+                # Name-based filtering since financial_group doesn't distinguish sub-sectors
+                "filter_type": "name_pattern",
+                "bank_patterns": ["Bank", "Bankas"]  # Actual banks have these in their names
+            },
+            "Ulaştırma-Lojistik": {
+                # Aviation-specific ratios
+                "aviation_ratios": ['roa', 'roe', 'ebitda_margin', 'debt_to_equity', 'debt_ratio'],
+                # Filter by financial_group: THYAO is UFRS_K, others are XI_29
+                "filter_type": "financial_group",
+                "aviation_group": "UFRS_K"
+            }
+        }
         
-        # For banking-only ratios in "Bankacılık & Finans" sector, only include UFRS_K (actual banks)
-        financial_group_filter = ""
-        if sector_main == "Bankacılık & Finans" and is_banking_only:
-            financial_group_filter = "AND c.financial_group = 'UFRS_K'"
+        # Determine if we need sub-sector filtering
+        additional_filter = ""
+        filter_applied = False
+        
+        if sector_value in INDUSTRY_GROUPINGS:
+            config = INDUSTRY_GROUPINGS[sector_value]
+            filter_type = config.get("filter_type")
+            
+            # Banking: name-based filtering
+            if sector_value == "Bankacılık":
+                if ratio_code in config.get("banking_ratios", []) or \
+                   ratio_code in config.get("bank_only_ratios", []):
+                    # Filter companies with "Bank" or "Bankas" in name
+                    patterns = config.get("bank_patterns", [])
+                    pattern_conditions = " OR ".join([f"c.name LIKE '%{p}%'" for p in patterns])
+                    additional_filter = f"AND ({pattern_conditions})"
+                    filter_applied = True
+            
+            # Transportation & Logistics: financial_group filtering
+            elif sector_value == "Ulaştırma-Lojistik":
+                if ratio_code in config.get("aviation_ratios", []):
+                    # Separate aviation (UFRS_K) from logistics (XI_29)
+                    additional_filter = f"AND c.financial_group = 'XI_29'"
+                    filter_applied = True
         
         query = text(f"""
             SELECT 
                 cr.ticker,
                 cr.ratio_value,
                 c.market_cap,
+                c.financial_group,
+                c.name,
                 (
                     SELECT COUNT(*) 
                     FROM company_ratios cr2 
@@ -315,28 +366,35 @@ class SectorBenchmarkService:
                 ) as available_periods
             FROM company_ratios cr
             JOIN companies c ON cr.ticker = c.ticker
-            WHERE c.sector_main = :sector_main
+            WHERE c.{sector_field} = :sector_value
               AND cr.ratio_code = :ratio_code  
               AND cr.period_key = :period_key
               AND c.is_active = true
-              {financial_group_filter}
+              {additional_filter}
         """)
         
         result = await self.db.execute(query, {
-            "sector_main": sector_main,
+            "sector_value": sector_value,
             "ratio_code": ratio_code,
             "period_key": period_key
         })
         
-        return [
+        peers = [
             {
                 "ticker": row.ticker,
                 "ratio_value": float(row.ratio_value) if row.ratio_value is not None else None,
                 "market_cap": float(row.market_cap) if row.market_cap else 0,
-                "available_periods": row.available_periods
+                "available_periods": row.available_periods,
+                "financial_group": row.financial_group
             }
             for row in result.fetchall()
         ]
+        
+        # Log sub-sector filtering for transparency
+        if filter_applied:
+            logger.debug(f"Sub-sector filtering applied: {sector_value} / {ratio_code} → {len(peers)} peers")
+        
+        return peers
 
     def _run_filter_pipeline(
         self, 
@@ -644,7 +702,7 @@ class SectorBenchmarkService:
 
     async def _save_insufficient_benchmark(
         self, 
-        sector_main: str,
+        sector_value: str,  # industry or sector_main value
         ratio_code: str, 
         period_key: str,
         filter_result: FilterResult
@@ -653,8 +711,8 @@ class SectorBenchmarkService:
         
         from sqlalchemy.dialects.postgresql import insert
         
-        stmt = insert(SectorBenchmark).values(
-            sector_main=sector_main,
+        insert_stmt = insert(SectorBenchmark).values(
+            sector_main=sector_value,  # Note: column name is still sector_main in DB
             ratio_code=ratio_code,
             period_key=period_key,
             median_ew=None,
@@ -669,35 +727,36 @@ class SectorBenchmarkService:
         ).on_conflict_do_update(
             index_elements=['sector_main', 'ratio_code', 'period_key'],
             set_={
-                'n_peers': stmt.excluded.n_peers,
-                'n_excluded': stmt.excluded.n_excluded,
+                'n_peers': insert_stmt.excluded.n_peers,
+                'n_excluded': insert_stmt.excluded.n_excluded,
                 'reliability': "INSUFFICIENT",
-                'computed_at': stmt.excluded.computed_at,
+                'computed_at': insert_stmt.excluded.computed_at,
                 'is_stale': False
             }
         )
         
-        await self.db.execute(stmt)
+        await self.db.execute(insert_stmt)
         await self.db.commit()
 
     async def _get_available_ratios(
         self, 
-        sector_main: str, 
-        period_key: str
+        sector_value: str,  # industry or sector_main value
+        period_key: str,
+        sector_field: str = "industry"  # "industry" or "sector_main"
     ) -> List[str]:
         """Get list of ratios available for this sector/period"""
         
-        query = text("""
+        query = text(f"""
             SELECT DISTINCT cr.ratio_code
             FROM company_ratios cr
             JOIN companies c ON cr.ticker = c.ticker
-            WHERE c.sector_main = :sector_main
+            WHERE c.{sector_field} = :sector_value
               AND cr.period_key = :period_key
               AND c.is_active = true
         """)
         
         result = await self.db.execute(query, {
-            "sector_main": sector_main,
+            "sector_value": sector_value,
             "period_key": period_key
         })
         

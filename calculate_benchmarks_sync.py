@@ -159,27 +159,57 @@ class SyncBenchmarkCalculator:
         ratio_code: str, 
         period_key: str
     ) -> List[Dict[str, Any]]:
-        """Get peer company data for ratio calculation with financial_group filtering"""
+        """Get peer company data for ratio calculation with smart sub-sector filtering"""
         
-        # Determine if this ratio should only compare actual banks (UFRS_K)
-        # Banking-specific ratios AND profitability ratios in banking sector
-        banking_only_ratios = [
-            'net_interest_margin', 'loan_to_deposit', 'npl_ratio', 
-            'capital_adequacy', 'cost_income_ratio',
-            'roa', 'roe'  # Profitability ratios should also only compare banks
-        ]
-        is_banking_only = ratio_code in banking_only_ratios
+        # Define industry-level groupings within broad sectors
+        INDUSTRY_GROUPINGS = {
+            "Bankacılık & Finans": {
+                # Banking-specific ratios only compare actual banks
+                "banking_ratios": ['net_interest_margin', 'loan_to_deposit', 'npl_ratio', 
+                                 'capital_adequacy', 'cost_income_ratio'],
+                # Profitability/efficiency ratios also only compare banks
+                "bank_only_ratios": ['roa', 'roe', 'net_margin', 'operating_margin', 
+                                    'ebitda_margin', 'asset_turnover', 'net_interest_margin'],
+                # Name-based filtering since financial_group doesn't distinguish sub-sectors
+                "filter_type": "name_pattern",
+                "bank_patterns": ["Bank", "Bankas"]  # Actual banks have these in their names
+            },
+            "Ulaştırma & Lojistik": {
+                # Aviation-specific ratios
+                "aviation_ratios": ['roa', 'roe', 'ebitda_margin', 'debt_to_equity', 'debt_ratio'],
+                # Filter by financial_group: THYAO is UFRS_K, others are XI_29
+                "filter_type": "financial_group",
+                "aviation_group": "UFRS_K"
+            }
+        }
         
-        # For banking-only ratios in "Bankacılık & Finans" sector, only include UFRS_K (actual banks)
-        financial_group_filter = ""
-        if sector_main == "Bankacılık & Finans" and is_banking_only:
-            financial_group_filter = "AND c.financial_group = 'UFRS_K'"
+        # Determine if we need sub-sector filtering
+        additional_filter = ""
+        
+        if sector_main in INDUSTRY_GROUPINGS:
+            config = INDUSTRY_GROUPINGS[sector_main]
+            
+            # Banking & Finance: name-based filtering
+            if sector_main == "Bankacılık & Finans":
+                if ratio_code in config.get("banking_ratios", []) or \
+                   ratio_code in config.get("bank_only_ratios", []):
+                    # Filter companies with "Bank" or "Bankas" in name
+                    patterns = config.get("bank_patterns", [])
+                    pattern_conditions = " OR ".join([f"c.name LIKE '%{p}%'" for p in patterns])
+                    additional_filter = f"AND ({pattern_conditions})"
+            
+            # Transportation & Logistics: financial_group filtering
+            elif sector_main == "Ulaştırma & Lojistik":
+                if ratio_code in config.get("aviation_ratios", []):
+                    # Separate aviation (UFRS_K) from logistics (XI_29)
+                    additional_filter = f"AND c.financial_group = 'XI_29'"
         
         query = text(f"""
             SELECT 
                 cr.ticker,
                 cr.ratio_value,
                 c.market_cap,
+                c.name,
                 (
                     SELECT COUNT(*) 
                     FROM company_ratios cr2 
@@ -192,7 +222,7 @@ class SyncBenchmarkCalculator:
               AND cr.ratio_code = :ratio_code  
               AND cr.period_key = :period_key
               AND c.is_active = true
-              {financial_group_filter}
+              {additional_filter}
         """)
         
         result = self.db.execute(query, {
