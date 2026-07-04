@@ -474,27 +474,50 @@ class FundamentalReportService:
         if val is None:
             return f"{ratio_code} verisi mevcut değil."
 
+        # Determine direction and magnitude
         direction = "yüksek" if diff_pct > 0 else "düşük"
-        magnitude = "belirgin şekilde" if abs(diff_pct) > 20 else "hafif"
+        
+        # Better magnitude classification
+        if abs(diff_pct) < 5:
+            magnitude = ""
+            is_at_average = True
+        elif abs(diff_pct) < 15:
+            magnitude = "hafif"
+            is_at_average = False
+        elif abs(diff_pct) < 30:
+            magnitude = "kayda değer"
+            is_at_average = False
+        elif abs(diff_pct) < 100:
+            magnitude = "belirgin şekilde"
+            is_at_average = False
+        else:
+            magnitude = "çok belirgin şekilde"
+            is_at_average = False
+
+        # Format percentage with magnitude
+        if is_at_average:
+            pct_text = "sektör ortalamasında"
+        else:
+            pct_text = f"sektör ortalamasına göre %{abs(diff_pct):.1f} {magnitude} {direction}"
 
         interpretations = {
-            "roe": f"Özkaynak kârlılığı sektör ortalamasına göre %{abs(diff_pct):.1f} {magnitude} {direction}. {'Güçlü getiri potansiyeli gösteriyor.' if diff_pct > 10 else 'İyileştirme alanı mevcut.'}",
-            "roa": f"Aktif kârlılığı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Varlık kullanım verimliliği güçlü.' if diff_pct > 10 else 'Varlık kullanımında optimizasyon potansiyeli var.'}",
-            "gross_margin": f"Brüt kâr marjı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Fiyatlama gücü ve maliyet kontrolü sağlıklı.' if diff_pct > 10 else 'Fiyatlandırma veya maliyet yapısında baskı var.'}",
-            "net_margin": f"Net kâr marjı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Sonuç kârlılığı güçlü.' if diff_pct > 10 else 'Gider yönetimi iyileştirilebilir.'}",
-            "operating_margin": f"Faaliyet kâr marjı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Operasyonel verimlilik yüksek.' if diff_pct > 10 else 'Operasyonel giderlerde optimizasyon gerekebilir.'}",
-            "ebitda_margin": f"FAVÖK marjı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Nakit yaratma kapasitesi güçlü.' if diff_pct > 10 else 'Nakit yaratma potansiyeli kısıtlı.'}",
-            "current_ratio": f"Cari oran sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Kısa vadeli likidite pozisyonu güçlü.' if val and val > 1.5 else 'Kısa vadeli likidite riski dikkat çekici.' if val and val < 1 else 'Likidite dengede.'}",
-            "acid_test_ratio": f"Asit test oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Stoksuz likidite gücü yüksek.' if val and val > 1 else 'Stoksuz likidite riski var.'}",
-            "debt_ratio": f"Borçlanma oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Finansal risk düşük.' if diff_pct < -10 else 'Yüksek borçlanma riski.' if diff_pct > 10 else 'Borçlanma seviyesi dengede.'}",
-            "debt_to_equity": f"Borç/Özkaynak oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Kaldıraç düşük ve güvenli.' if diff_pct < -10 else 'Kaldıraç yüksek — dikkatli olunmalı.' if diff_pct > 10 else 'Kaldıraç seviyesi dengede.'}",
-            "net_debt_to_equity": f"Net Borç/Özkaynak oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Net borç seviyesi düşük.' if diff_pct < -10 else 'Net borç yüksek — refinansman riski.' if diff_pct > 10 else 'Net borç seviyesi dengede.'}",
-            "asset_turnover": f"Aktif devir hızı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Varlık kullanımı verimli.' if diff_pct > 10 else 'Varlık kullanımında verimlilik artırılabilir.'}",
-            "npl_ratio": f"Takipteki kredi oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Kredi kalitesi güçlü.' if diff_pct < -10 else 'Kredi kalitesi riskli.' if diff_pct > 10 else 'Kredi kalitesi ortalamada.'}",
-            "capital_adequacy": f"Sermaye yeterlilik oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Sermaye yapısı güçlü.' if diff_pct > 10 else 'Sermaye yeterliliği düşük.' if diff_pct < -10 else 'Sermaye yapısı dengede.'}",
-            "net_interest_margin": f"Net faiz marjı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Faiz geliri performansı güçlü.' if diff_pct > 10 else 'Faiz marjı baskılı.'}",
-            "cost_income_ratio": f"Maliyet/Gelir oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Operasyonel verimlilik yüksek.' if diff_pct < -10 else 'Gider yönetimi iyileştirilebilir.'}",
-            "loan_to_deposit": f"Kredi/Mevduat oranı sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}. {'Likidite yönetimi sağlıklı.' if diff_pct < 10 else 'Likidite baskısı var.'}",
+            "roe": f"Özkaynak kârlılığı {pct_text}. {'' if is_at_average else ('Güçlü getiri potansiyeli gösteriyor.' if diff_pct > 10 else 'İyileştirme alanı mevcut.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "roa": f"Aktif kârlılığı {pct_text}. {'' if is_at_average else ('Varlık kullanım verimliliği güçlü.' if diff_pct > 10 else 'Varlık kullanımında optimizasyon potansiyeli var.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "gross_margin": f"Brüt kâr marjı {pct_text}. {'' if is_at_average else ('Fiyatlama gücü ve maliyet kontrolü sağlıklı.' if diff_pct > 10 else 'Fiyatlandırma veya maliyet yapısında baskı var.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "net_margin": f"Net kâr marjı {pct_text}. {'' if is_at_average else ('Sonuç kârlılığı güçlü.' if diff_pct > 10 else 'Gider yönetimi iyileştirilebilir.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "operating_margin": f"Faaliyet kâr marjı {pct_text}. {'' if is_at_average else ('Operasyonel verimlilik yüksek.' if diff_pct > 10 else 'Operasyonel giderlerde optimizasyon gerekebilir.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "ebitda_margin": f"FAVÖK marjı {pct_text}. {'' if is_at_average else ('Nakit yaratma kapasitesi güçlü.' if diff_pct > 10 else 'Nakit yaratma potansiyeli kısıtlı.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "current_ratio": f"Cari oran {pct_text}. {'Kısa vadeli likidite pozisyonu güçlü.' if val and val > 1.5 else 'Kısa vadeli likidite riski dikkat çekici.' if val and val < 1 else 'Likidite dengede.'}",
+            "acid_test_ratio": f"Asit test oranı {pct_text}. {'Stoksuz likidite gücü yüksek.' if val and val > 1 else 'Stoksuz likidite riski var.'}",
+            "debt_ratio": f"Borçlanma oranı {pct_text}. {'' if is_at_average else ('Finansal risk düşük.' if diff_pct < -10 else 'Yüksek borçlanma riski.' if diff_pct > 10 else 'Borçlanma seviyesi dengede.')}",
+            "debt_to_equity": f"Borç/Özkaynak oranı {pct_text}. {'' if is_at_average else ('Kaldıraç düşük ve güvenli.' if diff_pct < -10 else 'Kaldıraç yüksek — dikkatli olunmalı.' if diff_pct > 10 else 'Kaldıraç seviyesi dengede.')}",
+            "net_debt_to_equity": f"Net Borç/Özkaynak oranı {pct_text}. {'' if is_at_average else ('Net borç seviyesi düşük.' if diff_pct < -10 else 'Net borç yüksek — refinansman riski.' if diff_pct > 10 else 'Net borç seviyesi dengede.')}",
+            "asset_turnover": f"Aktif devir hızı {pct_text}. {'' if is_at_average else ('Varlık kullanımı verimli.' if diff_pct > 10 else 'Varlık kullanımında verimlilik artırılabilir.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "npl_ratio": f"Takipteki kredi oranı {pct_text}. {'' if is_at_average else ('Kredi kalitesi güçlü.' if diff_pct < -10 else 'Kredi kalitesi riskli.' if diff_pct > 10 else 'Kredi kalitesi ortalamada.')}",
+            "capital_adequacy": f"Sermaye yeterlilik oranı {pct_text}. {'' if is_at_average else ('Sermaye yapısı güçlü.' if diff_pct > 10 else 'Sermaye yeterliliği düşük.' if diff_pct < -10 else 'Sermaye yapısı dengede.')}",
+            "net_interest_margin": f"Net faiz marjı {pct_text}. {'' if is_at_average else ('Faiz geliri performansı güçlü.' if diff_pct > 10 else 'Faiz marjı baskılı.' if diff_pct < -10 else 'Sektör ortalaması seviyesinde.')}",
+            "cost_income_ratio": f"Maliyet/Gelir oranı {pct_text}. {'' if is_at_average else ('Operasyonel verimlilik yüksek.' if diff_pct < -10 else 'Gider yönetimi iyileştirilebilir.' if diff_pct > 10 else 'Sektör ortalaması seviyesinde.')}",
+            "loan_to_deposit": f"Kredi/Mevduat oranı {pct_text}. {'' if is_at_average else ('Likidite yönetimi sağlıklı.' if abs(diff_pct) < 10 else 'Likidite baskısı var.' if diff_pct > 10 else 'Fazla likidite var.')}",
         }
 
         return interpretations.get(ratio_code, f"Sektör ortalamasına göre %{abs(diff_pct):.1f} {direction}.")

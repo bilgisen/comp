@@ -159,9 +159,23 @@ class SyncBenchmarkCalculator:
         ratio_code: str, 
         period_key: str
     ) -> List[Dict[str, Any]]:
-        """Get peer company data for ratio calculation"""
+        """Get peer company data for ratio calculation with financial_group filtering"""
         
-        query = text("""
+        # Determine if this ratio should only compare actual banks (UFRS_K)
+        # Banking-specific ratios AND profitability ratios in banking sector
+        banking_only_ratios = [
+            'net_interest_margin', 'loan_to_deposit', 'npl_ratio', 
+            'capital_adequacy', 'cost_income_ratio',
+            'roa', 'roe'  # Profitability ratios should also only compare banks
+        ]
+        is_banking_only = ratio_code in banking_only_ratios
+        
+        # For banking-only ratios in "Bankacılık & Finans" sector, only include UFRS_K (actual banks)
+        financial_group_filter = ""
+        if sector_main == "Bankacılık & Finans" and is_banking_only:
+            financial_group_filter = "AND c.financial_group = 'UFRS_K'"
+        
+        query = text(f"""
             SELECT 
                 cr.ticker,
                 cr.ratio_value,
@@ -178,6 +192,7 @@ class SyncBenchmarkCalculator:
               AND cr.ratio_code = :ratio_code  
               AND cr.period_key = :period_key
               AND c.is_active = true
+              {financial_group_filter}
         """)
         
         result = self.db.execute(query, {
