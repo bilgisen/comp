@@ -111,13 +111,13 @@ async def get_industry_detail(
         result = await db.execute(query_text)
         all_industries = [row.industry for row in result.all()]
         
-        # Find industry by matching slug
+        # Find industry by matching slug (case-insensitive)
         def to_slug(name):
             return name.lower().replace(" ", "-").replace("&", "and").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c").replace("İ", "i")
         
         industry_name = None
         for ind in all_industries:
-            if to_slug(ind) == industry_slug:
+            if to_slug(ind) == industry_slug.lower():
                 industry_name = ind
                 break
         
