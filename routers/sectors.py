@@ -110,10 +110,13 @@ async def get_industry_detail(
                 c.industry,
                 c.market_cap,
                 c.city,
-                cs.score_genel as score
+                cs.score_genel as score,
+                cm.last_price,
+                cm.pe_ratio
             FROM companies c
             LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
                 AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
+            LEFT JOIN company_metrics cm ON c.ticker = cm.ticker
             WHERE c.is_active = TRUE
               AND c.industry IS NOT NULL
             ORDER BY cs.score_genel DESC NULLS LAST
@@ -155,7 +158,9 @@ async def get_industry_detail(
                     "name": row.company_name,
                     "market_cap": row.market_cap,
                     "city": row.city,
-                    "score": float(row.score) if row.score else None
+                    "score": float(row.score) if row.score else None,
+                    "price": float(row.last_price) if row.last_price else None,
+                    "pe_ratio": float(row.pe_ratio) if row.pe_ratio else None
                 }
                 for row in matching_companies
             ]
