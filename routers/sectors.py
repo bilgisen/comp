@@ -175,7 +175,7 @@ async def get_industry_detail(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/industries/{industry}/benchmarks")
+@router.get("/industries/{industry_slug}/benchmarks")
 async def get_industry_benchmarks(
     industry: str,
     period: Optional[str] = Query(None, description="Period key (e.g., 2026Q1)"),
