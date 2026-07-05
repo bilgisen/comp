@@ -95,15 +95,34 @@ async def list_industries(db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/industries/{industry}")
+@router.get("/industries/{industry_slug}")
 async def get_industry_detail(
-    industry: str,
+    industry_slug: str,
     db: AsyncSession = Depends(get_async_db)
 ):
     """Get detailed information about an industry"""
     try:
-        # Decode URL-encoded industry name
-        industry_name = industry.replace("-", " ").replace("and", "&").title()
+        # Get all industries first to find matching name
+        query_text = text("""
+            SELECT DISTINCT industry 
+            FROM companies 
+            WHERE is_active = TRUE AND industry IS NOT NULL
+        """)
+        result = await db.execute(query_text)
+        all_industries = [row.industry for row in result.all()]
+        
+        # Find industry by matching slug
+        def to_slug(name):
+            return name.lower().replace(" ", "-").replace("&", "and").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c").replace("İ", "i")
+        
+        industry_name = None
+        for ind in all_industries:
+            if to_slug(ind) == industry_slug:
+                industry_name = ind
+                break
+        
+        if not industry_name:
+            raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
         
         # Get company count and list
         query_text = text("""
@@ -126,11 +145,11 @@ async def get_industry_detail(
         companies = result.all()
         
         if not companies:
-            raise HTTPException(status_code=404, detail=f"Industry '{industry}' not found")
+            raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
         
         return {
-            "industry": industry_name,
-            "slug": industry,
+            "name": industry_name,
+            "slug": industry_slug,
             "total_companies": len(companies),
             "companies": [
                 {
@@ -148,7 +167,7 @@ async def get_industry_detail(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting industry detail for {industry}: {e}", exc_info=True)
+        logger.error(f"Error getting industry detail for {industry_slug}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
