@@ -109,7 +109,7 @@ async def get_industry_detail(
             WHERE is_active = TRUE AND industry IS NOT NULL
         """)
         industries_result = await db.execute(industries_query)
-        all_industries = [row[0] for row in industries_result.fetchall()]
+        all_industries = [row.industry for row in industries_result.fetchall()]
         
         # Create slug mapping
         def make_slug(name: str) -> str:
