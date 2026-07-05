@@ -95,39 +95,6 @@ async def list_industries(db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/industries/debug/{industry_slug}")
-async def debug_industry_lookup(
-    industry_slug: str,
-    db: AsyncSession = Depends(get_async_db)
-):
-    """Debug endpoint to check industry slug matching"""
-    industries_query = text("""
-        SELECT DISTINCT industry 
-        FROM companies 
-        WHERE is_active = TRUE AND industry IS NOT NULL
-    """)
-    industries_result = await db.execute(industries_query)
-    all_industries = [row.industry for row in industries_result.fetchall()]
-    
-    def make_slug(name: str) -> str:
-        s = name.lower()
-        s = s.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
-        s = s.replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
-        s = s.replace('İ', 'i').replace('Ş', 's').replace('Ğ', 'g')
-        s = s.replace('Ü', 'u').replace('Ö', 'o').replace('Ç', 'c')
-        s = s.replace(' ', '-').replace('&', 'and')
-        return s
-    
-    slug_map = {make_slug(ind): ind for ind in all_industries}
-    
-    return {
-        "requested_slug": industry_slug,
-        "found": industry_slug.lower() in slug_map,
-        "matched_name": slug_map.get(industry_slug.lower()),
-        "all_slugs": list(slug_map.keys())[:10]
-    }
-
-
 @router.get("/industries/{industry_slug}")
 async def get_industry_detail(
     industry_slug: str,
@@ -135,69 +102,74 @@ async def get_industry_detail(
 ):
     """Get detailed information about an industry"""
     try:
-        # Get all industries and create slug mapping (same as debug endpoint)
-        industries_query = text("""
-            SELECT DISTINCT industry 
-            FROM companies 
-            WHERE is_active = TRUE AND industry IS NOT NULL
-        """)
-        industries_result = await db.execute(industries_query)
-        all_industries = [row.industry for row in industries_result.fetchall()]
-        
-        # Create slug mapping
-        def make_slug(name: str) -> str:
-            s = name.lower()
-            s = s.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
-            s = s.replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
-            s = s.replace('İ', 'i').replace('Ş', 's').replace('Ğ', 'g')
-            s = s.replace('Ü', 'u').replace('Ö', 'o').replace('Ç', 'c')
-            s = s.replace(' ', '-').replace('&', 'and')
-            return s
-        
-        # Find matching industry name
-        slug_map = {make_slug(ind): ind for ind in all_industries}
-        industry_name = slug_map.get(industry_slug.lower())
-        
-        if not industry_name:
-            raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
-        
-        # Get companies for this industry
+        # Get companies directly using case-insensitive industry name match
         companies_query = text("""
             SELECT 
                 c.ticker,
-                c.name,
+                c.name as company_name,
+                c.industry,
                 c.market_cap,
                 c.city,
-                cs.total_score,
-                cs.percentile
+                COALESCE(cs.total_score, 0) as total_score,
+                COALESCE(cs.percentile, 0) as percentile
             FROM companies c
             LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
                 AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
-            WHERE c.industry = :industry_name
-              AND c.is_active = TRUE
+            WHERE c.is_active = TRUE
+              AND c.industry IS NOT NULL
             ORDER BY cs.total_score DESC NULLS LAST
         """)
         
-        result = await db.execute(companies_query, {"industry_name": industry_name})
-        companies_rows = result.fetchall()
+        result = await db.execute(companies_query)
+        all_companies = result.fetchall()
+        
+        # Filter by slug match in Python
+        def make_slug(name: str) -> str:
+            if not name:
+                return ""
+            s = name.lower()
+            for old, new in [('ı', 'i'), ('ş', 's'), ('ğ', 'g'), ('ü', 'u'), ('ö', 'o'), ('ç', 'c'),
+                            ('İ', 'i'), ('Ş', 's'), ('Ğ', 'g'), ('Ü', 'u'), ('Ö', 'o'), ('Ç', 'c'),
+                            (' ', '-'), ('&', 'and')]:
+                s = s.replace(old, new)
+            return s
+        
+        matching_companies = []
+        industry_name = None
+        
+        for row in all_companies:
+            if row.industry and make_slug(row.industry) == industry_slug.lower():
+                if industry_name is None:
+                    industry_name = row.industry
+                matching_companies.append(row)
+        
+        if not matching_companies:
+            raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
         
         return {
             "name": industry_name,
             "slug": industry_slug,
-            "total_companies": len(companies_rows),
+            "total_companies": len(matching_companies),
             "companies": [
                 {
                     "ticker": row.ticker,
-                    "name": row.name,
-                    "market_cap": float(row.market_cap) if row.market_cap else None,
+                    "name": row.company_name,
+                    "market_cap": row.market_cap,
                     "city": row.city,
-                    "score": float(row.total_score) if row.total_score else None,
-                    "percentile": float(row.percentile) if row.percentile else None
+                    "score": row.total_score if row.total_score else None,
+                    "percentile": row.percentile if row.percentile else None
                 }
-                for row in companies_rows
+                for row in matching_companies
             ]
         }
         
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_industry_detail for {industry_slug}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
     except HTTPException:
         raise
     except Exception as e:
