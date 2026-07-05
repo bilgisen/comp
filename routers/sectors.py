@@ -102,46 +102,54 @@ async def get_industry_detail(
 ):
     """Get detailed information about an industry"""
     try:
-        # Normalize slug for comparison (Turkish chars to ASCII)
-        normalized_slug = (industry_slug.lower()
-            .replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
-            .replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
-            .replace(' ', '-').replace('&', 'and'))
-        
-        # Use SQL to normalize industry names and match
-        query_text = text("""
-            WITH normalized_industries AS (
-                SELECT 
-                    c.ticker,
-                    c.name,
-                    c.industry,
-                    c.market_cap,
-                    c.city,
-                    cs.total_score,
-                    cs.percentile,
-                    LOWER(
-                        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                            c.industry,
-                            'ı', 'i'), 'ş', 's'), 'ğ', 'g'), 'ü', 'u'), 'ö', 'o'), 'ç', 'c'), ' ', '-')
-                    ) as normalized_name
-                FROM companies c
-                LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
-                    AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
-                WHERE c.is_active = TRUE AND c.industry IS NOT NULL
-            )
-            SELECT ticker, name, industry, market_cap, city, total_score, percentile
-            FROM normalized_industries
-            WHERE normalized_name = :slug
-            ORDER BY total_score DESC NULLS LAST
+        # First get list of all distinct industries
+        industries_query = text("""
+            SELECT DISTINCT industry 
+            FROM companies 
+            WHERE is_active = TRUE AND industry IS NOT NULL
         """)
+        industries_result = await db.execute(industries_query)
+        all_industries = [row[0] for row in industries_result.fetchall()]
         
-        result = await db.execute(query_text, {"slug": normalized_slug})
-        companies = result.fetchall()
+        # Create slug mapping
+        def make_slug(name: str) -> str:
+            s = name.lower()
+            s = s.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
+            s = s.replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
+            s = s.replace('İ', 'i').replace('Ş', 's').replace('Ğ', 'g')
+            s = s.replace('Ü', 'u').replace('Ö', 'o').replace('Ç', 'c')
+            s = s.replace(' ', '-').replace('&', 'and')
+            return s
         
-        if not companies:
+        # Find matching industry name
+        industry_name = None
+        for ind_name in all_industries:
+            if make_slug(ind_name) == industry_slug.lower():
+                industry_name = ind_name
+                break
+        
+        if not industry_name:
             raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
         
-        industry_name = companies[0].industry
+        # Get companies for this industry
+        companies_query = text("""
+            SELECT 
+                c.ticker,
+                c.name,
+                c.market_cap,
+                c.city,
+                cs.total_score,
+                cs.percentile
+            FROM companies c
+            LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
+                AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
+            WHERE c.industry = :industry_name
+              AND c.is_active = TRUE
+            ORDER BY cs.total_score DESC NULLS LAST
+        """)
+        
+        result = await db.execute(companies_query, {"industry_name": industry_name})
+        companies = result.fetchall()
         
         return {
             "name": industry_name,
