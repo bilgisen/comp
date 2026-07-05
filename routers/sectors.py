@@ -131,7 +131,7 @@ async def get_industry_detail(
         """)
         
         result = await db.execute(query_text)
-        all_companies = result.all()
+        all_companies = result.fetchall()  # Use fetchall() for AsyncSession
         
         # Filter companies by matching slug
         matching_companies = []
