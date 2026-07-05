@@ -95,6 +95,39 @@ async def list_industries(db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/industries/debug/{industry_slug}")
+async def debug_industry_lookup(
+    industry_slug: str,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Debug endpoint to check industry slug matching"""
+    industries_query = text("""
+        SELECT DISTINCT industry 
+        FROM companies 
+        WHERE is_active = TRUE AND industry IS NOT NULL
+    """)
+    industries_result = await db.execute(industries_query)
+    all_industries = [row.industry for row in industries_result.fetchall()]
+    
+    def make_slug(name: str) -> str:
+        s = name.lower()
+        s = s.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
+        s = s.replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
+        s = s.replace('İ', 'i').replace('Ş', 's').replace('Ğ', 'g')
+        s = s.replace('Ü', 'u').replace('Ö', 'o').replace('Ç', 'c')
+        s = s.replace(' ', '-').replace('&', 'and')
+        return s
+    
+    slug_map = {make_slug(ind): ind for ind in all_industries}
+    
+    return {
+        "requested_slug": industry_slug,
+        "found": industry_slug.lower() in slug_map,
+        "matched_name": slug_map.get(industry_slug.lower()),
+        "all_slugs": list(slug_map.keys())[:10]
+    }
+
+
 @router.get("/industries/{industry_slug}")
 async def get_industry_detail(
     industry_slug: str,
