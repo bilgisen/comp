@@ -135,7 +135,7 @@ async def get_industry_detail(
 ):
     """Get detailed information about an industry"""
     try:
-        # First get list of all distinct industries
+        # Get all industries and create slug mapping (same as debug endpoint)
         industries_query = text("""
             SELECT DISTINCT industry 
             FROM companies 
@@ -155,11 +155,8 @@ async def get_industry_detail(
             return s
         
         # Find matching industry name
-        industry_name = None
-        for ind_name in all_industries:
-            if make_slug(ind_name) == industry_slug.lower():
-                industry_name = ind_name
-                break
+        slug_map = {make_slug(ind): ind for ind in all_industries}
+        industry_name = slug_map.get(industry_slug.lower())
         
         if not industry_name:
             raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
@@ -182,22 +179,22 @@ async def get_industry_detail(
         """)
         
         result = await db.execute(companies_query, {"industry_name": industry_name})
-        companies = result.fetchall()
+        companies_rows = result.fetchall()
         
         return {
             "name": industry_name,
             "slug": industry_slug,
-            "total_companies": len(companies),
+            "total_companies": len(companies_rows),
             "companies": [
                 {
-                    "ticker": c.ticker,
-                    "name": c.name,
-                    "market_cap": c.market_cap,
-                    "city": c.city,
-                    "score": float(c.total_score) if c.total_score else None,
-                    "percentile": float(c.percentile) if c.percentile else None
+                    "ticker": row.ticker,
+                    "name": row.name,
+                    "market_cap": float(row.market_cap) if row.market_cap else None,
+                    "city": row.city,
+                    "score": float(row.total_score) if row.total_score else None,
+                    "percentile": float(row.percentile) if row.percentile else None
                 }
-                for c in companies
+                for row in companies_rows
             ]
         }
         
