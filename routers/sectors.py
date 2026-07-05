@@ -102,33 +102,24 @@ async def get_industry_detail(
 ):
     """Get detailed information about an industry"""
     try:
-        # Get all industries first to find matching name
-        query_text = text("""
-            SELECT DISTINCT industry 
-            FROM companies 
-            WHERE is_active = TRUE AND industry IS NOT NULL
-        """)
-        result = await db.execute(query_text)
-        all_industries = [row.industry for row in result.all()]
+        # Helper function to convert industry name to slug
+        def to_slug(name: str) -> str:
+            name_lower = name.lower()
+            # Turkish character mapping
+            replacements = {
+                'ı': 'i', 'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c',
+                'İ': 'i', 'Ş': 's', 'Ğ': 'g', 'Ü': 'u', 'Ö': 'o', 'Ç': 'c'
+            }
+            for tr_char, en_char in replacements.items():
+                name_lower = name_lower.replace(tr_char, en_char)
+            return name_lower.replace(" ", "-").replace("&", "and")
         
-        # Find industry by matching slug (case-insensitive)
-        def to_slug(name):
-            return name.lower().replace(" ", "-").replace("&", "and").replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c").replace("İ", "i")
-        
-        industry_name = None
-        for ind in all_industries:
-            if to_slug(ind) == industry_slug.lower():
-                industry_name = ind
-                break
-        
-        if not industry_name:
-            raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
-        
-        # Get company count and list
+        # Get company count and list - match by slug
         query_text = text("""
             SELECT 
                 c.ticker,
                 c.name,
+                c.industry,
                 c.market_cap,
                 c.city,
                 cs.total_score,
@@ -136,21 +127,32 @@ async def get_industry_detail(
             FROM companies c
             LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
                 AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
-            WHERE c.industry = :industry 
-              AND c.is_active = TRUE
-            ORDER BY cs.total_score DESC NULLS LAST
+            WHERE c.is_active = TRUE
         """)
         
-        result = await db.execute(query_text, {"industry": industry_name})
-        companies = result.all()
+        result = await db.execute(query_text)
+        all_companies = result.all()
         
-        if not companies:
+        # Filter companies by matching slug
+        matching_companies = []
+        industry_name = None
+        
+        for c in all_companies:
+            if c.industry and to_slug(c.industry) == industry_slug.lower():
+                if industry_name is None:
+                    industry_name = c.industry
+                matching_companies.append(c)
+        
+        if not matching_companies:
             raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
+        
+        # Sort by score descending (nulls last)
+        matching_companies.sort(key=lambda x: (x.total_score is None, -x.total_score if x.total_score else 0))
         
         return {
             "name": industry_name,
             "slug": industry_slug,
-            "total_companies": len(companies),
+            "total_companies": len(matching_companies),
             "companies": [
                 {
                     "ticker": c.ticker,
@@ -160,7 +162,7 @@ async def get_industry_detail(
                     "score": float(c.total_score) if c.total_score else None,
                     "percentile": float(c.percentile) if c.percentile else None
                 }
-                for c in companies
+                for c in matching_companies
             ]
         }
         
