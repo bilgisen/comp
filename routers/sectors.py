@@ -102,57 +102,51 @@ async def get_industry_detail(
 ):
     """Get detailed information about an industry"""
     try:
-        # Helper function to convert industry name to slug
-        def to_slug(name: str) -> str:
-            name_lower = name.lower()
-            # Turkish character mapping
-            replacements = {
-                'ı': 'i', 'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c',
-                'İ': 'i', 'Ş': 's', 'Ğ': 'g', 'Ü': 'u', 'Ö': 'o', 'Ç': 'c'
-            }
-            for tr_char, en_char in replacements.items():
-                name_lower = name_lower.replace(tr_char, en_char)
-            return name_lower.replace(" ", "-").replace("&", "and")
+        # Normalize slug for comparison (Turkish chars to ASCII)
+        normalized_slug = (industry_slug.lower()
+            .replace('ı', 'i').replace('ş', 's').replace('ğ', 'g')
+            .replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
+            .replace(' ', '-').replace('&', 'and'))
         
-        # Get company count and list - match by slug
+        # Use SQL to normalize industry names and match
         query_text = text("""
-            SELECT 
-                c.ticker,
-                c.name,
-                c.industry,
-                c.market_cap,
-                c.city,
-                cs.total_score,
-                cs.percentile
-            FROM companies c
-            LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
-                AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
-            WHERE c.is_active = TRUE
+            WITH normalized_industries AS (
+                SELECT 
+                    c.ticker,
+                    c.name,
+                    c.industry,
+                    c.market_cap,
+                    c.city,
+                    cs.total_score,
+                    cs.percentile,
+                    LOWER(
+                        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                            c.industry,
+                            'ı', 'i'), 'ş', 's'), 'ğ', 'g'), 'ü', 'u'), 'ö', 'o'), 'ç', 'c'), ' ', '-')
+                    ) as normalized_name
+                FROM companies c
+                LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
+                    AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
+                WHERE c.is_active = TRUE AND c.industry IS NOT NULL
+            )
+            SELECT ticker, name, industry, market_cap, city, total_score, percentile
+            FROM normalized_industries
+            WHERE normalized_name = :slug
+            ORDER BY total_score DESC NULLS LAST
         """)
         
-        result = await db.execute(query_text)
-        all_companies = result.fetchall()  # Use fetchall() for AsyncSession
+        result = await db.execute(query_text, {"slug": normalized_slug})
+        companies = result.fetchall()
         
-        # Filter companies by matching slug
-        matching_companies = []
-        industry_name = None
-        
-        for c in all_companies:
-            if c.industry and to_slug(c.industry) == industry_slug.lower():
-                if industry_name is None:
-                    industry_name = c.industry
-                matching_companies.append(c)
-        
-        if not matching_companies:
+        if not companies:
             raise HTTPException(status_code=404, detail=f"Industry '{industry_slug}' not found")
         
-        # Sort by score descending (nulls last)
-        matching_companies.sort(key=lambda x: (x.total_score is None, -x.total_score if x.total_score else 0))
+        industry_name = companies[0].industry
         
         return {
             "name": industry_name,
             "slug": industry_slug,
-            "total_companies": len(matching_companies),
+            "total_companies": len(companies),
             "companies": [
                 {
                     "ticker": c.ticker,
@@ -162,7 +156,7 @@ async def get_industry_detail(
                     "score": float(c.total_score) if c.total_score else None,
                     "percentile": float(c.percentile) if c.percentile else None
                 }
-                for c in matching_companies
+                for c in companies
             ]
         }
         
