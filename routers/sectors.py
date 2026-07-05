@@ -110,14 +110,14 @@ async def get_industry_detail(
                 c.industry,
                 c.market_cap,
                 c.city,
-                COALESCE(cs.total_score, 0) as total_score,
-                COALESCE(cs.percentile, 0) as percentile
+                COALESCE(cs.score_genel, 0) as score,
+                COALESCE(cs.percentile_overall, 0) as percentile
             FROM companies c
             LEFT JOIN company_scores cs ON c.ticker = cs.ticker 
                 AND cs.period_key = (SELECT MAX(period_key) FROM company_scores WHERE is_stale = FALSE)
             WHERE c.is_active = TRUE
               AND c.industry IS NOT NULL
-            ORDER BY cs.total_score DESC NULLS LAST
+            ORDER BY cs.score_genel DESC NULLS LAST
         """)
         
         result = await db.execute(companies_query)
@@ -156,7 +156,7 @@ async def get_industry_detail(
                     "name": row.company_name,
                     "market_cap": row.market_cap,
                     "city": row.city,
-                    "score": row.total_score if row.total_score else None,
+                    "score": row.score if row.score else None,
                     "percentile": row.percentile if row.percentile else None
                 }
                 for row in matching_companies
