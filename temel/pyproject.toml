@@ -1,0 +1,8 @@
+[project]
+name = "temel"
+version = "1.0.0"
+description = "HissePro Temel Finansal Analiz API"
+requires-python = ">=3.13"
+dependencies = [
+  "workers-runtime-sdk",
+]

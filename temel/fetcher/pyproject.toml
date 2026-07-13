@@ -1,0 +1,7 @@
+[project]
+name = "temel-fetcher"
+version = "1.0.0"
+requires-python = ">=3.13"
+dependencies = [
+  "workers-runtime-sdk",
+]

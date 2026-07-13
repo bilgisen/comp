@@ -1,0 +1,32 @@
+name = "temel"
+main = "src/index.py"
+compatibility_date = "2026-07-10"
+compatibility_flags = ["python_workers"]
+
+# D1 Database
+[[d1_databases]]
+binding = "TEMEL_DB"
+database_name = "temel-db"
+database_id = "60c3d57f-4f31-4514-8f0e-1a3eb10bff0b"
+
+[[kv_namespaces]]
+binding = "TEMEL_CACHE"
+id = "7a12cfad9cae4d46b265f8973361c380"
+
+[vars]
+ISYATIRIM_BASE_URL = "https://www.isyatirim.com.tr"
+ISYATIRIM_TIMEOUT = 30
+ISYATIRIM_RATE_LIMIT = 20
+ISYATIRIM_DELAY = 3.0
+CACHE_TTL_RATIOS = 3600
+CACHE_TTL_COMPANY = 21600
+CACHE_TTL_AI_CONTEXT = 1800
+
+# Environment
+ENVIRONMENT = "development"
+
+[env.development]
+vars = { ENVIRONMENT = "development" }
+
+[env.production]
+vars = { ENVIRONMENT = "production" }

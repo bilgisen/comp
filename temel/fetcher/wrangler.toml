@@ -1,0 +1,27 @@
+name = "temel-fetcher"
+main = "src/index.py"
+compatibility_date = "2026-07-10"
+compatibility_flags = ["python_workers"]
+
+[[d1_databases]]
+binding = "TEMEL_DB"
+database_name = "temel-db"
+database_id = "60c3d57f-4f31-4514-8f0e-1a3eb10bff0b"
+
+[[kv_namespaces]]
+binding = "TEMEL_CACHE"
+id = "7a12cfad9cae4d46b265f8973361c380"
+
+# Layer 1: Daily 07:00 TR (04:00 UTC) - KAP window companies
+# Layer 2: Sunday 04:00 TR (01:00 UTC) - All active companies
+[triggers]
+crons = ["0 4 * * *", "0 1 * * 0"]
+
+[vars]
+ISYATIRIM_BASE_URL = "https://www.isyatirim.com.tr"
+ISYATIRIM_TIMEOUT = 30
+ISYATIRIM_RATE_LIMIT = 20
+ISYATIRIM_DELAY = 3.0
+FETCH_BATCH_SIZE = 10
+FETCH_SESSION_BREAK = 120
+ENVIRONMENT = "production"

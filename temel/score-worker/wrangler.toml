@@ -1,0 +1,19 @@
+name = "temel-score-worker"
+main = "src/index.py"
+compatibility_date = "2026-07-10"
+compatibility_flags = ["python_workers"]
+
+[[d1_databases]]
+binding = "TEMEL_DB"
+database_name = "temel-db"
+database_id = "60c3d57f-4f31-4514-8f0e-1a3eb10bff0b"
+
+[[kv_namespaces]]
+binding = "TEMEL_CACHE"
+id = "7a12cfad9cae4d46b265f8973361c380"
+
+[triggers]
+crons = ["0 8 * * 0"]
+
+[vars]
+ENVIRONMENT = "production"
