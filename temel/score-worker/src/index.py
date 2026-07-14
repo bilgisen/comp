@@ -918,21 +918,36 @@ class Default(WorkerEntrypoint):
 
     async def _sector_detail(self, name, params):
         db = self.env.TEMEL_DB
-        name = name.replace("_", " ")
         limit = min(int(params.get("limit", "50")), 200)
+        original_name = name
 
-        sector_info = await db.prepare("SELECT sector_main, COUNT(*) as cnt FROM companies WHERE sector_main = ? AND is_active = 1 GROUP BY sector_main").bind(name).first()
+        # Try raw name first (with underscores -> spaces for sector_main matching)
+        name_with_spaces = name.replace("_", " ")
+        sector_info = await db.prepare("SELECT sector_main, COUNT(*) as cnt FROM companies WHERE sector_main = ? AND is_active = 1 GROUP BY sector_main").bind(name_with_spaces).first()
         if sector_info:
-            return await self._single_sector_detail(db, name, sector_info["cnt"], limit)
+            return await self._single_sector_detail(db, name_with_spaces, sector_info["cnt"], limit)
 
-        # Try as consolidated group
+        # Try as consolidated group key (underscore format preserved)
         for k, v in SECTOR_GROUP_NAMES.items():
-            if v.lower().replace(" ", "_").replace("&", "ve") == name.lower().replace(" ", "_").replace("&", "ve") or v.lower() == name.lower():
+            if v.lower().replace(" ", "_").replace("&", "ve") == original_name.lower().replace(" ", "_").replace("&", "ve") or v.lower() == original_name.lower():
+                return await self._group_detail(db, k, limit)
+            if k.lower() == original_name.lower():
                 return await self._group_detail(db, k, limit)
         for k, v in SECTOR_CONSOLIDATION.items():
-            if v and (v == name or v.lower() == name.lower()):
+            if v and (v == original_name or v.lower() == original_name.lower()):
                 return await self._group_detail(db, v, limit)
-            if k.lower() == name.lower():
+            if k.lower() == original_name.lower():
+                c = SECTOR_CONSOLIDATION.get(k)
+                if c:
+                    return await self._group_detail(db, c, limit)
+            if v and v.lower().replace("_", "") == original_name.lower().replace("_", ""):
+                return await self._group_detail(db, v, limit)
+
+        # Last resort: try name_with_spaces against consolidation keys/values
+        for k, v in SECTOR_CONSOLIDATION.items():
+            if v and (v.replace("_", " ") == name_with_spaces or v.replace("_", " ").lower() == name_with_spaces.lower()):
+                return await self._group_detail(db, v, limit)
+            if k.lower() == name_with_spaces.lower():
                 c = SECTOR_CONSOLIDATION.get(k)
                 if c:
                     return await self._group_detail(db, c, limit)
