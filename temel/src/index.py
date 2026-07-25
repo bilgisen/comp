@@ -1,4 +1,5 @@
 from workers import WorkerEntrypoint, Response
+from urllib.parse import unquote
 
 from config import init_settings
 from db.client import D1Client
@@ -8,7 +9,8 @@ from routers.companies import (
     get_trends, get_sectors, search_companies, get_financial_summary, calculate_ratios
 )
 from routers.analysis import (
-    get_ai_context, get_temel_analiz, get_swot, get_fundamental_report
+    get_ai_context, get_temel_analiz, get_swot, get_fundamental_report,
+    get_sector_context, get_compare_context
 )
 
 
@@ -27,7 +29,8 @@ def parse_params(request):
 def get_path(request):
     url = request.url.split("?")[0]
     parts = url.split("/")
-    return "/" + "/".join(parts[3:]).rstrip("/")
+    decoded_parts = [unquote(p) for p in parts[3:]]
+    return "/" + "/".join(decoded_parts).rstrip("/")
 
 
 def parts_from_path(path):
@@ -36,6 +39,12 @@ def parts_from_path(path):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
+        try:
+            return await self._handle(request)
+        except Exception as e:
+            return Response.json({"error": str(e)}, status=500)
+
+    async def _handle(self, request):
         init_settings(self.env)
         db = D1Client(self.env.TEMEL_DB)
         method = request.method.upper()
@@ -88,7 +97,23 @@ class Default(WorkerEntrypoint):
                     else:
                         return Response.json({"error": f"Unknown endpoint: {sub}"}, status=404)
                     return Response.json(data, status=status)
-            if resource == "ai" and len(parts) >= 5:
+            if resource == "ai" and len(parts) >= 4:
+                ai_sub = parts[3]
+                if ai_sub == "sector-context" and len(parts) >= 5:
+                    sector_name = unquote(parts[4])
+                    result = await get_sector_context(sector_name, qp("period"), db, self.env)
+                    data, status = result if isinstance(result, tuple) else (result, 200)
+                    return Response.json(data, status=status)
+                if ai_sub == "compare-context" and method == "POST":
+                    import json as _json
+                    body_text = await request.text()
+                    body_data = _json.loads(body_text) if body_text.strip() else {}
+                    result = await get_compare_context(body_data, db, self.env)
+                    data, status = result if isinstance(result, tuple) else (result, 200)
+                    return Response.json(data, status=status)
+                if len(parts) < 5:
+                    return Response.json({"error": "Not found"}, status=404)
+
                 ai_type = parts[3]
                 ticker = parts[4].upper()
                 ai_map = {
