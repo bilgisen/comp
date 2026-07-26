@@ -6,11 +6,8 @@ from db.client import D1Client
 from routers import health
 from routers.companies import (
     list_companies, get_company_profile, get_statements, get_ratios,
-    get_trends, get_sectors, search_companies, get_financial_summary, calculate_ratios
-)
-from routers.analysis import (
-    get_ai_context, get_temel_analiz, get_swot, get_fundamental_report,
-    get_sector_context, get_compare_context
+    get_trends, get_sectors, search_companies, get_financial_summary,
+    calculate_ratios, screener_filter
 )
 
 
@@ -64,6 +61,10 @@ class Default(WorkerEntrypoint):
         if path == "/":
             return Response.json(health.root_handler())
 
+        if path == "/api/v1/screener/filter":
+            data, status = await screener_filter(params, db)
+            return Response.json(data, status=status)
+
         if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
             resource = parts[2]
             if resource == "sectors" and len(parts) == 3:
@@ -97,35 +98,5 @@ class Default(WorkerEntrypoint):
                     else:
                         return Response.json({"error": f"Unknown endpoint: {sub}"}, status=404)
                     return Response.json(data, status=status)
-            if resource == "ai" and len(parts) >= 4:
-                ai_sub = parts[3]
-                if ai_sub == "sector-context" and len(parts) >= 5:
-                    sector_name = unquote(parts[4])
-                    result = await get_sector_context(sector_name, qp("period"), db, self.env)
-                    data, status = result if isinstance(result, tuple) else (result, 200)
-                    return Response.json(data, status=status)
-                if ai_sub == "compare-context" and method == "POST":
-                    import json as _json
-                    body_text = await request.text()
-                    body_data = _json.loads(body_text) if body_text.strip() else {}
-                    result = await get_compare_context(body_data, db, self.env)
-                    data, status = result if isinstance(result, tuple) else (result, 200)
-                    return Response.json(data, status=status)
-                if len(parts) < 5:
-                    return Response.json({"error": "Not found"}, status=404)
-
-                ai_type = parts[3]
-                ticker = parts[4].upper()
-                ai_map = {
-                    "context": lambda: get_ai_context(ticker, qp("type", "basic"), qp("period"), qp("force", "false"), db, self.env),
-                    "analysis": lambda: get_temel_analiz(ticker, qp("period"), db, self.env),
-                    "swot": lambda: get_swot(ticker, qp("period"), db, self.env),
-                    "fundamental-report": lambda: get_fundamental_report(ticker, qp("period"), db, self.env),
-                }
-                if ai_type in ai_map:
-                    result = await ai_map[ai_type]()
-                    data, status = result if isinstance(result, tuple) else (result, 200)
-                    return Response.json(data, status=status)
-                return Response.json({"error": f"Unknown AI type: {ai_type}"}, status=404)
 
         return Response.json({"error": "Not found"}, status=404)

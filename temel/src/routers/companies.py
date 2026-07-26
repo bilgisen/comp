@@ -7,6 +7,7 @@ from models.metrics import MetricsModel
 from services.ratio_calculator import RatioCalculator
 from kv.cache import KVCache
 from routers.mappings import map_financial_group, map_statement_type, RATIO_NAMES
+from services.screener import ScreenerService
 
 
 async def list_companies(page_str: str, limit_str: str, sector: Optional[str], db: D1Client) -> dict:
@@ -197,3 +198,8 @@ async def calculate_ratios(ticker: str, period_key: Optional[str], db: D1Client,
         "ticker": ticker.upper(), "period": period_key,
         "total": len(results), "successful": saved, "failed": len(results) - saved
     }, 200
+
+
+async def screener_filter(params: dict, db: D1Client) -> dict:
+    service = ScreenerService(db)
+    return await service.filter(params), 200

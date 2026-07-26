@@ -4,33 +4,33 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                Cloudflare Workers (Python)           │
+│            Cloudflare Workers (Python + JS)           │
 │                                                      │
-│  ┌──────────────┐   ┌──────────────┐   ┌───────────┐│
-│  │ ratio-worker │   │ score-worker │   │price-worker││
-│  │  (v2 ratios) │   │ (benchmarks  │   │ (fiyat    ││
-│  │              │   │  + scoring)  │   │  çekme)   ││
-│  └──────┬───────┘   └──────┬───────┘   └─────┬─────┘│
-│         │                  │                  │       │
-│         └────────┬─────────┘──────────────────┘       │
-│                  │                                    │
-│         ┌────────▼────────┐                           │
-│         │  Cloudflare D1  │                           │
-│         │  (SQLite)       │                           │
-│         │  temel-db       │                           │
-│         └─────────────────┘                           │
-│                                                      │
-│  ┌──────────────────┐                                │
-│  │  KV (TEMEL_CACHE) │  ← ratio-worker cursor        │
+│  ┌──────────────┐   ┌──────────────┐                 │
+│  │ ratio-worker │   │ score-worker │                 │
+│  │  (v2 ratios) │──▶│ (benchmarks  │                 │
+│  │              │   │  + scoring)  │                 │
+│  └──────────────┘   └──────┬───────┘                 │
+│                            │                          │
+│                   ┌────────▼────────┐                 │
+│                   │  Cloudflare D1  │                 │
+│                   │  (SQLite)       │                 │
+│                   │  temel-db       │                 │
+│                   └────────┬────────┘                 │
+│                            │                          │
+│  ┌──────────────────┐      │                          │
+│  │  KV (TEMEL_CACHE) │◄────┘ (score-worker GET       │
+│  │  1h TTL          │       cached via KV)           │
 │  └──────────────────┘                                │
 └─────────────────────────────────────────────────────┘
          │
          ▼
-┌──────────────────┐   ┌───────────────────┐
-│  Hono API        │   │  TanStack Ön Yüz  │
-│  (Orchestrator)  │──▶│  (React Router 7) │
-│  /api/v1/...     │   │  BIST Analiz      │
-└──────────────────┘   └───────────────────┘
+┌─────────────────────┐   ┌───────────────────┐
+│  Hono API (JS)      │   │  TanStack Ön Yüz  │
+│  /api/v1/...        │──▶│  (React Router 7) │
+│  /ai/... (native)   │   │  BIST Analiz      │
+│  env.DB + env.KV    │   └───────────────────┘
+└─────────────────────┘
 ```
 
 ### 1.1 Worker'lar
@@ -39,17 +39,17 @@
 |--------|-----------|-----|-----|
 | Ratio | `temel-ratio-worker` | `https://temel-ratio-worker.paraanaliz.workers.dev` | Python (Pyodide) |
 | Score | `temel-score-worker` | `https://temel-score-worker.paraanaliz.workers.dev` | Python (Pyodide) |
-| Price | `temel-price-worker` | Yok (yedekte) | Python |
 | Fetcher | `temel-fetcher` | Yok (seed scripts) | Python |
+
+> **price-worker kaldırıldı** (Temmuz 2026) — price verisi artık fetcher + Hono üzerinden yönetiliyor.
 
 ### 1.2 Altyapı
 
 - **Cloudflare D1** — Worker'larla aynı bölgede SQLite, tek veritabanı (`temel-db`)
-- **Cloudflare KV** — ratio-worker cursor state tutar (`TEMEL_CACHE`)
+- **Cloudflare KV** — score-worker GET endpoint'leri için response cache (`TEMEL_CACHE`, 1h TTL)
 - **Python Workers** — `compatibility_flags = ["python_workers"]` ile Pyodide, numpy/scipy yok, tüm istatistik saf Python
-- **Cron Triggers** (Dashboard'da manuel):
-  - ratio-worker: `0 6 * * 0` (Pazar 06:00 UTC)
-  - score-worker: `0 8 * * 0` (Pazar 08:00 UTC)
+- **Hono JS Worker** — AI endpoint'leri (`/ai/*`) native JS ile `env.DB`'ye direkt bağlanır, temel'e proxy yapmaz
+- **Cron Triggers** (Cloudflare Dashboard):
 
 ---
 
@@ -63,20 +63,24 @@ fetcher/ (seed script, local Python)
      │  JSON çek → financial_statements_raw tablosuna yaz
      │
      ▼
-ratio-worker (cron: Pazar 06:00)
+ratio-worker (cron: Pazar 06:00 UTC)
      │  raw veriden 13 item_code okur
      │  17 rasyo hesaplar → company_ratios tablosu
      │  Sektör profiline göre hangi rasyolar hesaplanır
      │
      ▼
-score-worker (cron: Pazar 08:00)
+score-worker (cron: Pazar 08:00 UTC)
      │  1. Benchmark hesaplama (sektör/grup/market medyanları)
      │  2. Skor hesaplama (3 pillar, sigmoid, F1-F5 filtreleri)
      │
      ▼
-Hono API / TanStack Frontend
-     │  score-worker endpoint'lerini tüketir
-     │  ranking, score card, comparison, sector pages
+Hono API (JS Worker) — iki rol:
+     │  A) /api/v1/* → score-worker'a proxy (skor, ranking, compare)
+     │  B) /ai/* → native JS, direkt D1'den AI içerik üret
+     │
+     ▼
+TanStack Frontend
+     │  ranking, score card, comparison, sector pages, AI analiz
 ```
 
 ---
@@ -220,14 +224,14 @@ async def scheduled(self, event):
 |--------|------|----------|
 | GET/POST | `/scores/compute?cursor=N` | Skor hesapla (20'lik batch) |
 | GET/POST | `/benchmarks/compute?cursor=N` | Benchmark hesapla (cursor-based) |
-| GET | `/score/{TICKER}` | Hisse skor kartı |
-| GET | `/compare/{T1},{T2},{T3}` | 2-5 hisse karşılaştırma |
-| GET | `/rankings/sector/{name}` | Sektör sıralaması |
-| GET | `/rankings/group/{name}` | Grup sıralaması |
-| GET | `/rankings/market` | Pazar sıralaması |
-| GET | `/sectors` | Tüm sektörler + consolidated group listesi |
-| GET | `/sectors/{name}` | Sektör/grup detayı (benchmark + leaderboard) |
-| GET | `/absolute/{TICKER}` | Benchmark bağımsız absolute skor |
+| GET | `/score/{TICKER}` | Hisse skor kartı (KV cached 1h) |
+| GET | `/compare/{T1},{T2},{T3}` | 2-5 hisse karşılaştırma (KV cached 1h) |
+| GET | `/rankings/sector/{name}` | Sektör sıralaması (KV cached 1h) |
+| GET | `/rankings/group/{name}` | Grup sıralaması (KV cached 1h) |
+| GET | `/rankings/market` | Pazar sıralaması (KV cached 1h) |
+| GET | `/sectors` | Tüm sektörler + consolidated group listesi (KV cached 1h) |
+| GET | `/sectors/{name}` | Sektör/grup detayı (benchmark + leaderboard, KV cached 1h) |
+| GET | `/absolute/{TICKER}` | Benchmark bağımsız absolute skor (KV cached 1h) |
 | GET | `/seed_consolidation` | sector_consolidation tablosunu doldur |
 
 ### 5.2 Benchmark Sistemi (3 Tier)
@@ -356,9 +360,9 @@ _degerleme (weight varies)
   - `_winsorize()` (5-95)
   - `_weighted_quantile()` (piyasa değeri ağırlıklı)
   - `_sigmoid_score()` (exp ile manuel)
-- **HttpClient yok** → sadece D1 + KV API'ları
 - **scheduled handler** → `async def scheduled(self, event)` sınıf metodu
 - **sınıf adı**: `Default`, `WorkerEntrypoint`'ten türet
+- **KV API**: `env.TEMEL_CACHE.get() / .put()` — GET response'ları 1 saat cache'lenir
 
 ### 6.2 D1 API Pattern'leri
 
@@ -397,7 +401,7 @@ Sektör isimlerinde Türkçe karakterler var (Bankacılık, İnşaat, Gıda, Çi
 
 ## 7. Hono API & Frontend Entegrasyonu
 
-### 7.1 Önerilen Hono Route'ları
+### 7.1 Hono Route'ları
 
 ```typescript
 // Proxy — score-worker'a yönlendir
@@ -410,6 +414,14 @@ GET  /api/v1/absolute/:ticker
 
 // Cache — ratio-worker verileri
 GET  /api/v1/ratios/:ticker
+
+// Native JS AI — direkt D1'den, temel'e proxy yok
+GET  /ai/context/:ticker
+GET  /ai/analysis/:ticker
+GET  /ai/swot/:ticker
+GET  /ai/fundamental-report/:ticker
+GET  /ai/sector-context/:sector
+POST /ai/compare-context
 
 // Admin — sadece scheduled worker'lar çağırır
 POST /api/v1/admin/refresh/ratios   // ratio-worker /compute
@@ -431,12 +443,16 @@ POST /api/v1/admin/refresh/scores   // score-worker /benchmarks + scores
 
 ### 7.3 Önbellekleme Stratejisi
 
-- **Score/skor kartı**: 1 saat CDN cache (sadece haftalık değişir)
+- **KV Cache (score-worker)**: `TEMEL_CACHE` binding, 1 saat TTL, MD5(path+query) key
+  - `X-Cache: HIT/MISS` header, `X-Cache-Key` header
+  - Tüm GET endpoint'ler: `/score/`, `/rankings/`, `/sectors`, `/compare/`, `/absolute/`
+  - Compute endpoint'leri cache'lenmez (`/benchmarks/compute`, `/scores/compute`, `/seed_consolidation`)
+- **Score/skor kartı**: 1 saat KV cache (sadece haftalık değişir)
 - **Rankings/sectors**: 1 saat
 - **Sector detail**: 1 saat
 - **Absolute**: 1 saat
-- **Karşılaştırma**: 5 dk
-- **Ratios**: 1 saat
+- **Karşılaştırma**: 1 saat
+- **Ratios**: 1 saat (Hono cache middleware)
 
 ### 7.4 TanStack Frontend Sayfaları
 
@@ -524,6 +540,10 @@ curl https://temel-score-worker.paraanaliz.workers.dev/absolute/AGESA
 | Pillar config varyantı | 6 (_default, Bankacilik_Finans, Sigortacilik, GYO, Teknoloji_Iletisim, Holdingler) |
 | En yüksek skor | LMKDC 80.04 (Çimento) |
 | En düşük skor | CMBTN 20.12 (Demir-Çelik Döküm) |
+| Worker sayısı | 2 (ratio-worker, score-worker) — price-worker kaldırıldı |
+| AI modül sayısı | 9 JS modül (Hono'da, temel'den taşındı) |
+| KV cache | Aktif (TEMEL_CACHE, 1h TTL, tüm GET endpoint'leri) |
+| Logging | Aktif (JSON log, cron/cache hit/fetch) |
 
 ### 10.1 Neden null Score?
 
@@ -561,11 +581,18 @@ Hono orchestrator:
 cd temel/ratio-worker && npx wrangler deploy
 cd temel/score-worker && npx wrangler deploy
 
+# Hono deploy (AI katmanı)
+cd hono/hono && npx wrangler deploy
+
 # D1 sorgu
 npx wrangler d1 execute temel-db --command "SELECT COUNT(*) FROM companies" --remote
 
 # Seed consolidation
 curl https://temel-score-worker.paraanaliz.workers.dev/seed_consolidation
+
+# Benchmark & Score refresh (manual)
+curl -X POST https://temel-score-worker.paraanaliz.workers.dev/benchmarks/compute
+curl -X POST https://temel-score-worker.paraanaliz.workers.dev/scores/compute?cursor=0
 ```
 
 ---

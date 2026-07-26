@@ -213,15 +213,15 @@ class RatioCalculator:
         return results
 
     def _assess_quality(self, config: RatioConfig, data: dict) -> float:
-        import re
-        quality = 1.0
-        fields = re.findall(r"data\[['\"]([^'\"]+)['\"]", str(config.formula)) if hasattr(config.formula, '__code__') else []
+        code = config.formula.__code__
+        fields = list(dict.fromkeys(
+            name for name in code.co_names
+            if name not in ('get', 'abs', 'max', 'min', 'float', 'int', 'str', 'None', 'True', 'False')
+        ))
         if not fields:
-            formula_str = str(config.formula)
-            fields = re.findall(r"\.get\(['\"]([^'\"]+)['\"]", formula_str)
-        if fields:
-            missing = sum(1 for f in fields if f not in data)
-            quality *= (len(fields) - missing) / len(fields)
+            return 1.0
+        missing = sum(1 for f in fields if f not in data or data.get(f) is None)
+        quality = (len(fields) - missing) / len(fields)
         if config.type == "ttm":
             quality *= 0.95
         return round(quality, 2)
