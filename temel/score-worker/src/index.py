@@ -54,7 +54,7 @@ def _log(msg, extra=None):
     if extra: payload["extra"] = extra
     print(json.dumps(payload))
 
-async def _cached_json(kv, key, data, status=200):
+async def _cached_json(kv, key, data, status=200, tags=None):
     etag = _compute_etag(data)
     if kv is not None and key:
         await _cache_set(kv, key, data, etag)
@@ -62,6 +62,8 @@ async def _cached_json(kv, key, data, status=200):
     if key:
         headers["X-Cache"] = "MISS"
         headers["X-Cache-Key"] = key
+    if tags:
+        headers["Cache-Tag"] = " ".join(tags)
     return Response.json(data, status=status, headers=headers)
 
 def _median(values):
@@ -858,7 +860,7 @@ class Default(WorkerEntrypoint):
                 "sector": company["sector_main"],
                 "score": None, "ratios": ratio_map,
             }
-            return await _cached_json(kv, cache_key, data)
+            return await _cached_json(kv, cache_key, data, tags=[f"company:{ticker}"])
 
         details = await db.prepare("SELECT * FROM company_score_details WHERE score_id = ?").bind(s["id"]).all()
         detail_list = [dict(d) for d in details.results]
@@ -895,7 +897,7 @@ class Default(WorkerEntrypoint):
             "ranks": {"sector": sector_rank, "group": group_rank},
             "ratios": ratio_map,
         }
-        return await _cached_json(kv, cache_key, data)
+        return await _cached_json(kv, cache_key, data, tags=[f"company:{ticker}"])
 
     async def _calc_rank(self, db, ticker, scope_name, scope_type):
         if scope_type == "sector":
@@ -957,7 +959,8 @@ class Default(WorkerEntrypoint):
             row["rank"] = offset + i + 1
 
         data = {"scope": scope_type, "name": scope_name, "total": total, "limit": limit, "offset": offset, "results": rows}
-        return await _cached_json(kv, cache_key, data)
+        tag_val = scope_name or scope_type
+        return await _cached_json(kv, cache_key, data, tags=[f"rankings:{scope_type}:{tag_val}"])
 
     # ─── Comparison ────────────────────────────────────────────────────
 
@@ -992,7 +995,7 @@ class Default(WorkerEntrypoint):
                 "key_ratios": {rc: rm.get(rc) for rc in ["pe", "pb", "roe", "net_margin", "current_ratio", "debt_equity"]},
             })
         data = {"tickers": results}
-        return await _cached_json(kv, cache_key, data)
+        return await _cached_json(kv, cache_key, data, tags=["compare"])
 
     # ─── Absolute Score ────────────────────────────────────────────────
 
@@ -1019,7 +1022,7 @@ class Default(WorkerEntrypoint):
             "label_tr": label_tr.get(abs_data["label"]),
             "ratio_scores": ratio_scores,
         }
-        return await _cached_json(kv, cache_key, data)
+        return await _cached_json(kv, cache_key, data, tags=[f"company:{ticker}"])
 
     # ─── Sector List & Detail ──────────────────────────────────────────
 
@@ -1038,7 +1041,7 @@ class Default(WorkerEntrypoint):
 
         group_list = [{"key": g["sector_consolidated"], "name": SECTOR_GROUP_NAMES.get(g["sector_consolidated"], g["sector_consolidated"]), "count": g["cnt"]} for g in groups.results]
 
-        return await _cached_json(kv, cache_key, {"sectors": sector_list, "groups": group_list})
+        return await _cached_json(kv, cache_key, {"sectors": sector_list, "groups": group_list}, tags=["sectors:list"])
 
     async def _sector_detail(self, name, params, kv=None, cache_key=None):
         db = self.env.TEMEL_DB
@@ -1050,39 +1053,39 @@ class Default(WorkerEntrypoint):
         sector_info = await db.prepare("SELECT sector_main, COUNT(*) as cnt FROM companies WHERE sector_main = ? AND is_active = 1 GROUP BY sector_main").bind(name_with_spaces).first()
         if sector_info:
             data = await self._single_sector_detail(db, name_with_spaces, sector_info["cnt"], limit)
-            return await _cached_json(kv, cache_key, data)
+            return await _cached_json(kv, cache_key, data, tags=[f"sector:{name_with_spaces}"])
 
         # Try as consolidated group key (underscore format preserved)
         for k, v in SECTOR_GROUP_NAMES.items():
             if v.lower().replace(" ", "_").replace("&", "ve") == original_name.lower().replace(" ", "_").replace("&", "ve") or v.lower() == original_name.lower():
                 data = await self._group_detail(db, k, limit)
-                return await _cached_json(kv, cache_key, data)
+                return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
             if k.lower() == original_name.lower():
                 data = await self._group_detail(db, k, limit)
-                return await _cached_json(kv, cache_key, data)
+                return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
         for k, v in SECTOR_CONSOLIDATION.items():
             if v and (v == original_name or v.lower() == original_name.lower()):
                 data = await self._group_detail(db, v, limit)
-                return await _cached_json(kv, cache_key, data)
+                return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
             if k.lower() == original_name.lower():
                 c = SECTOR_CONSOLIDATION.get(k)
                 if c:
                     data = await self._group_detail(db, c, limit)
-                    return await _cached_json(kv, cache_key, data)
+                    return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
             if v and v.lower().replace("_", "") == original_name.lower().replace("_", ""):
                 data = await self._group_detail(db, v, limit)
-                return await _cached_json(kv, cache_key, data)
+                return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
 
         # Last resort: try name_with_spaces against consolidation keys/values
         for k, v in SECTOR_CONSOLIDATION.items():
             if v and (v.replace("_", " ") == name_with_spaces or v.replace("_", " ").lower() == name_with_spaces.lower()):
                 data = await self._group_detail(db, v, limit)
-                return await _cached_json(kv, cache_key, data)
+                return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
             if k.lower() == name_with_spaces.lower():
                 c = SECTOR_CONSOLIDATION.get(k)
                 if c:
                     data = await self._group_detail(db, c, limit)
-                    return await _cached_json(kv, cache_key, data)
+                    return await _cached_json(kv, cache_key, data, tags=[f"sector:{original_name}"])
 
         return Response.json({"error": "sector not found"}, status=404)
 
