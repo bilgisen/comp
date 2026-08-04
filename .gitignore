@@ -107,3 +107,6 @@ temelfinansal.xlsx
 
 # Microsoft Word documents
 *.docx
+
+# Cloudflare Workers
+.wrangler

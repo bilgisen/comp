@@ -1,4 +1,5 @@
 from typing import Optional
+import re
 from db.client import D1Client
 
 
@@ -22,6 +23,25 @@ class ScreenerService:
     def __init__(self, db: D1Client):
         self.db = db
 
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return (value or "").lower().replace("ı", "i").replace("ş", "s").replace("ğ", "g").replace("ü", "u").replace("ö", "o").replace("ç", "c")
+
+    @staticmethod
+    def _chunk_ids(ids: list, size: int = 90):
+        for i in range(0, len(ids), size):
+            yield ids[i:i + size]
+
+    async def _query_in(self, sql_prefix: str, sql_suffix: str, ids: list, extra_params: Optional[list] = None) -> list:
+        """Run an IN(...) query in chunks to stay under D1's 100 bound-parameter limit."""
+        rows = []
+        extra = extra_params or []
+        for chunk in self._chunk_ids(ids):
+            placeholders = ",".join(["?"] * len(chunk))
+            r = await self.db.query(sql_prefix + placeholders + sql_suffix, list(chunk) + extra)
+            rows.extend(r.results)
+        return rows
+
     async def filter(self, params: dict) -> dict:
         sector = params.get("sector", "")
         group = params.get("group", "")
@@ -30,45 +50,89 @@ class ScreenerService:
         score_max = self._float_or_none(params.get("score_max"))
         sort_by = params.get("sort_by", "composite_score")
         sort_dir = params.get("sort_dir", "desc")
+        if sort_by in RATIO_ALIASES:
+            sort_by = RATIO_ALIASES[sort_by]
+        elif sort_by.endswith("_min") or sort_by.endswith("_max"):
+            base = sort_by[:-4]
+            if base in RATIO_ALIASES:
+                sort_by = RATIO_ALIASES[base]
 
-        where_clauses = ["c.is_active = 1"]
+        where_clauses = ["is_active = 1"]
         where_params = []
 
         if sector:
-            where_clauses.append("c.sector_main = ?")
-            where_params.append(sector)
+            s = sector.strip()
+            cons = s.replace("&", "ve").replace(" ", "_")
+            clauses = [
+                "sector_main = ?",
+                "sector_main IN (SELECT sector_raw FROM sector_consolidation WHERE sector_consolidated IN (?, ?) OR sector_raw IN (?, ?))",
+            ]
+            where_params.extend([s, s, cons, s, cons])
+            norm = self._normalize(s)
+            clauses.append(
+                "LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(sector_main,'ı','i'),'ş','s'),'ğ','g'),'ü','u'),'ö','o')) = ?"
+            )
+            where_params.append(norm)
+            words = [w for w in re.split(r"[&\s]+", s) if len(w) >= 3]
+            if len(words) >= 2:
+                like_conditions = " AND ".join(["sector_consolidated LIKE ?"] * len(words))
+                clauses.append(f"sector_main IN (SELECT sector_raw FROM sector_consolidation WHERE {like_conditions})")
+                where_params.extend([f"%{w}%" for w in words])
+            where_clauses.append("(" + " OR ".join(clauses) + ")")
         if group:
-            where_clauses.append("c.financial_group = ?")
+            where_clauses.append("financial_group = ?")
             where_params.append(group)
         if q:
-            where_clauses.append("(c.ticker LIKE ? OR c.name LIKE ?)")
+            where_clauses.append("(ticker LIKE ? OR name LIKE ?)")
             like = f"%{q.upper()}%"
             where_params.extend([like, like])
 
         where_sql = " AND ".join(where_clauses)
 
         companies = await self.db.query(
-            f"SELECT ticker, name, sector_main, financial_group, market_cap FROM companies {where_sql} ORDER BY market_cap DESC",
+            f"SELECT ticker, name, sector_main, financial_group, market_cap FROM companies WHERE {where_sql} ORDER BY market_cap DESC",
             where_params
         )
         tickers = [r["ticker"] for r in companies.results]
         if not tickers:
             return {"total": 0, "results": []}
 
-        scores_raw = await self.db.query(
-            "SELECT ticker, composite_score, pillar_finansal_saglik, pillar_karlilik_buyume, pillar_degerleme, absolute_score "
-            "FROM company_scores WHERE ticker IN (" + ",".join(["?"] * len(tickers)) + ") AND period_key = 'TTM' AND score_version = 'v1'",
+        scores_raw = await self._query_in(
+            "SELECT id, ticker, composite_score, pillar_finansal_saglik, pillar_karlilik_buyume, pillar_degerleme, absolute_score "
+            "FROM company_scores WHERE ticker IN (",
+            ") AND period_key = 'TTM' AND score_version = 'v1'",
             tickers
         )
-        score_map = {r["ticker"]: r for r in scores_raw.results}
+        score_map = {r["ticker"]: r for r in scores_raw}
 
-        ratios_raw = await self.db.query(
-            "SELECT ticker, ratio_code, ratio_value FROM company_ratios "
-            "WHERE ticker IN (" + ",".join(["?"] * len(tickers)) + ") AND period_key = 'TTM'",
+        score_ids = [r["id"] for r in scores_raw if r.get("id")]
+        ticker_by_score_id = {r["id"]: r["ticker"] for r in scores_raw if r.get("id")}
+        details_map: dict[str, dict[str, dict]] = {}
+        if score_ids:
+            details_raw = await self._query_in(
+                "SELECT score_id, ratio_code, ratio_value, peer_median, percentile, higher_is_better "
+                "FROM company_score_details WHERE score_id IN (",
+                ")",
+                score_ids
+            )
+            for d in details_raw:
+                ticker = ticker_by_score_id.get(d["score_id"])
+                if not ticker:
+                    continue
+                details_map.setdefault(ticker, {})[d["ratio_code"]] = {
+                    "value": d.get("ratio_value"),
+                    "peer_median": d.get("peer_median"),
+                    "percentile": d.get("percentile"),
+                    "higher_is_better": d.get("higher_is_better"),
+                }
+
+        ratios_raw = await self._query_in(
+            "SELECT ticker, ratio_code, ratio_value FROM company_ratios WHERE ticker IN (",
+            ") AND period_key = 'TTM'",
             tickers
         )
         ratio_map: dict[str, dict[str, float | None]] = {}
-        for r in ratios_raw.results:
+        for r in ratios_raw:
             t = r["ticker"]
             if t not in ratio_map:
                 ratio_map[t] = {}
@@ -107,6 +171,7 @@ class ScreenerService:
                 continue
 
             ticker_ratios = ratio_map.get(ticker, {})
+            ticker_details = details_map.get(ticker, {})
 
             if ratio_filters and not passes_ratio_filters(ticker_ratios):
                 continue
@@ -122,6 +187,8 @@ class ScreenerService:
                 "pillar_degerleme": sc.get("pillar_degerleme"),
                 "absolute_score": sc.get("absolute_score"),
                 "ratios": ticker_ratios,
+                "percentiles": {code: d["percentile"] for code, d in ticker_details.items() if d.get("percentile") is not None},
+                "peer_medians": {code: d["peer_median"] for code, d in ticker_details.items() if d.get("peer_median") is not None},
             })
 
         reverse = sort_dir.lower() != "asc"

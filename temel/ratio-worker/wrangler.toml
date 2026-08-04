@@ -13,7 +13,7 @@ binding = "TEMEL_CACHE"
 id = "7a12cfad9cae4d46b265f8973361c380"
 
 [triggers]
-crons = ["0 6 * * 0"]
+crons = ["0 6 * * 7"]
 
 [vars]
 ENVIRONMENT = "production"

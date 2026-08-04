@@ -618,8 +618,53 @@ class Default(WorkerEntrypoint):
         if new_cursor >= total:
             new_cursor = 0
 
+        if new_cursor == 0 and len(results) > 0:
+            await self._compute_percentiles(db)
+
         _log("compute_scores_done", {"computed": len(results), "cursor": new_cursor, "done": new_cursor == 0})
         return Response.json({"computed": len(results), "total": total, "cursor": new_cursor, "results": results})
+
+    async def _ensure_percentile_column(self, db):
+        try:
+            await db.prepare("ALTER TABLE company_scores ADD COLUMN percentile_score REAL").run()
+        except Exception:
+            pass
+
+    async def _compute_percentiles(self, db):
+        await self._ensure_percentile_column(db)
+        r = await db.prepare(
+            "SELECT ticker, composite_score FROM company_scores WHERE period_key = 'TTM' AND score_version = 'v1' AND composite_score IS NOT NULL"
+        ).all()
+        rows = [dict(x) for x in r.results]
+        if not rows:
+            return
+        scores = sorted(x["composite_score"] for x in rows)
+        n = len(scores)
+
+        def _pct(v):
+            lo = 0
+            hi = n
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if scores[mid] < v:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            below = lo
+            while lo < n and scores[lo] == v:
+                lo += 1
+            equal = lo - below
+            return round((below + 0.5 * equal) / n * 100, 1)
+
+        for row in rows:
+            pct = _pct(row["composite_score"])
+            try:
+                await db.prepare(
+                    "UPDATE company_scores SET percentile_score = ? WHERE ticker = ? AND period_key = 'TTM' AND score_version = 'v1'"
+                ).bind(pct, row["ticker"]).run()
+            except Exception:
+                pass
+        _log("percentiles_computed", {"n": n})
 
     async def _score_single_company(self, db, ticker, sector_main):
         period_key = "TTM"
@@ -657,7 +702,7 @@ class Default(WorkerEntrypoint):
         peer_map = {}
         for row in pr.results:
             val = row["ratio_value"]
-            if val is not None and math.isfinite(val):
+            if val is not None and math.isfinite(val) and _f3_economic_validity(row["ratio_code"], val, sector_main):
                 peer_map.setdefault(row["ratio_code"], []).append(val)
 
         # Get benchmarks (batched)
@@ -693,12 +738,23 @@ class Default(WorkerEntrypoint):
                 peers = peer_map.get(rc, [])
                 hib = HIGHER_IS_BETTER.get(rc, True)
                 raw_score, peer_median = _sigmoid_score(value, peers, hib)
+                pct = None
+                if peers and len(peers) >= 3:
+                    below = sum(1 for p in peers if p < value)
+                    equal = sum(1 for p in peers if p == value)
+                    pct = round((below + 0.5 * equal) / len(peers) * 100, 1)
                 if raw_score is None:
                     bench = bench_data.get(rc, {})
                     if bench and bench.get("n_peers", 0) >= 3:
                         med = bench.get("median_ew")
                         if med is not None:
-                            raw_score, _ = _sigmoid_score(value, [med], hib)
+                            p25 = bench.get("p25")
+                            p75 = bench.get("p75")
+                            if p25 is not None and p75 is not None and (p75 - p25) > 1e-10:
+                                approx_std = (p75 - p25) / 1.349
+                                raw_score, peer_median = _sigmoid_score(value, [med - approx_std, med, med + approx_std], hib)
+                            else:
+                                raw_score, peer_median = _sigmoid_score(value, [med], hib)
                 if raw_score is None: continue
 
                 bench = bench_data.get(rc, {})
@@ -711,6 +767,7 @@ class Default(WorkerEntrypoint):
                 details.append({
                     "ratio_code": rc, "ratio_value": value, "peer_median": peer_median,
                     "raw_score": round(raw_score, 2), "final_score": round(final_score, 2),
+                    "percentile": pct,
                     "higher_is_better": 1 if hib else 0, "reliability": rel,
                 })
 
@@ -744,10 +801,10 @@ class Default(WorkerEntrypoint):
                 for d in dets:
                     stmts.append(
                         db.prepare(
-                            "INSERT INTO company_score_details (score_id, ratio_code, ratio_value, peer_median, raw_score, final_score, higher_is_better, reliability, pillar) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            "INSERT INTO company_score_details (score_id, ratio_code, ratio_value, peer_median, raw_score, final_score, percentile, higher_is_better, reliability, pillar) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         ).bind(
                             sid, d["ratio_code"], d["ratio_value"], d["peer_median"],
-                            d["raw_score"], d["final_score"], d["higher_is_better"], d["reliability"], pname,
+                            d["raw_score"], d["final_score"], d.get("percentile"), d["higher_is_better"], d["reliability"], pname,
                         )
                     )
             return stmts
@@ -875,7 +932,8 @@ class Default(WorkerEntrypoint):
             return [{
                 "ratio_code": d["ratio_code"], "ratio_value": d["ratio_value"],
                 "peer_median": d["peer_median"], "raw_score": d["raw_score"],
-                "final_score": d["final_score"], "reliability": d["reliability"],
+                "final_score": d["final_score"], "percentile": d.get("percentile"),
+                "reliability": d["reliability"],
             } for d in detail_list if d.get("pillar") == pname]
 
         data = {
@@ -883,6 +941,7 @@ class Default(WorkerEntrypoint):
             "company_name": company["name"],
             "sector": company["sector_main"],
             "composite_score": s["composite_score"],
+            "percentile": s.get("percentile_score"),
             "reliability": s["reliability"],
             "pillars": {
                 "finansal_saglik": {"score": s["pillar_finansal_saglik"], "details": pillar_details("finansal_saglik")},
@@ -940,14 +999,14 @@ class Default(WorkerEntrypoint):
 
         if bind_val:
             r = await db.prepare(
-                f"SELECT cs.ticker, c.name, c.sector_main, cs.composite_score, cs.reliability, cs.pillar_finansal_saglik, cs.pillar_karlilik_buyume, cs.pillar_degerleme, c.market_cap FROM company_scores cs JOIN companies c ON cs.ticker = c.ticker WHERE cs.period_key = 'TTM' AND cs.score_version = 'v1' AND cs.composite_score IS NOT NULL AND {cond} ORDER BY cs.composite_score DESC LIMIT ? OFFSET ?"
+                f"SELECT cs.ticker, c.name, c.sector_main, cs.composite_score, cs.percentile_score, cs.reliability, cs.pillar_finansal_saglik, cs.pillar_karlilik_buyume, cs.pillar_degerleme, c.market_cap FROM company_scores cs JOIN companies c ON cs.ticker = c.ticker WHERE cs.period_key = 'TTM' AND cs.score_version = 'v1' AND cs.composite_score IS NOT NULL AND {cond} ORDER BY cs.composite_score DESC LIMIT ? OFFSET ?"
             ).bind(bind_val, limit, offset).all()
             cr = await db.prepare(
                 f"SELECT COUNT(*) as cnt FROM company_scores cs JOIN companies c ON cs.ticker = c.ticker WHERE cs.period_key = 'TTM' AND cs.score_version = 'v1' AND cs.composite_score IS NOT NULL AND {cond}"
             ).bind(bind_val).first()
         else:
             r = await db.prepare(
-                "SELECT cs.ticker, c.name, c.sector_main, cs.composite_score, cs.reliability, cs.pillar_finansal_saglik, cs.pillar_karlilik_buyume, cs.pillar_degerleme, c.market_cap FROM company_scores cs JOIN companies c ON cs.ticker = c.ticker WHERE cs.period_key = 'TTM' AND cs.score_version = 'v1' AND cs.composite_score IS NOT NULL ORDER BY cs.composite_score DESC LIMIT ? OFFSET ?"
+                "SELECT cs.ticker, c.name, c.sector_main, cs.composite_score, cs.percentile_score, cs.reliability, cs.pillar_finansal_saglik, cs.pillar_karlilik_buyume, cs.pillar_degerleme, c.market_cap FROM company_scores cs JOIN companies c ON cs.ticker = c.ticker WHERE cs.period_key = 'TTM' AND cs.score_version = 'v1' AND cs.composite_score IS NOT NULL ORDER BY cs.composite_score DESC LIMIT ? OFFSET ?"
             ).bind(limit, offset).all()
             cr = await db.prepare(
                 "SELECT COUNT(*) as cnt FROM company_scores WHERE period_key = 'TTM' AND score_version = 'v1' AND composite_score IS NOT NULL"
@@ -983,9 +1042,14 @@ class Default(WorkerEntrypoint):
             s = dict(score) if score else {}
             ratios = await db.prepare("SELECT ratio_code, ratio_value FROM company_ratios WHERE ticker = ? AND period_key = 'TTM' AND calculation_method = 'v2'").bind(t).all()
             rm = {r["ratio_code"]: r["ratio_value"] for r in ratios.results}
+            ratio_pct = {}
+            if s.get("id"):
+                det = await db.prepare("SELECT ratio_code, percentile FROM company_score_details WHERE score_id = ?").bind(s["id"]).all()
+                ratio_pct = {r["ratio_code"]: r["percentile"] for r in det.results if r["percentile"] is not None}
             results.append({
                 "ticker": t, "company_name": company["name"], "sector": company["sector_main"],
-                "composite_score": s.get("composite_score"), "reliability": s.get("reliability"),
+                "composite_score": s.get("composite_score"), "percentile": s.get("percentile_score"),
+                "reliability": s.get("reliability"),
                 "pillars": {
                     "finansal_saglik": s.get("pillar_finansal_saglik"),
                     "karlilik_buyume": s.get("pillar_karlilik_buyume"),
@@ -993,6 +1057,7 @@ class Default(WorkerEntrypoint):
                 },
                 "absolute": {"score": s.get("absolute_score"), "label": s.get("absolute_label")},
                 "key_ratios": {rc: rm.get(rc) for rc in ["pe", "pb", "roe", "net_margin", "current_ratio", "debt_equity"]},
+                "ratio_percentiles": {rc: ratio_pct.get(rc) for rc in ["pe", "pb", "roe", "net_margin", "current_ratio", "debt_equity"]},
             })
         data = {"tickers": results}
         return await _cached_json(kv, cache_key, data, tags=["compare"])

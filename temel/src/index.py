@@ -7,7 +7,7 @@ from routers import health
 from routers.companies import (
     list_companies, get_company_profile, get_statements, get_ratios,
     get_trends, get_sectors, search_companies, get_financial_summary,
-    calculate_ratios, screener_filter
+    calculate_ratios, screener_filter, screener_benchmarks
 )
 
 
@@ -19,7 +19,7 @@ def parse_params(request):
         for pair in qs.split("&"):
             if "=" in pair:
                 k, v = pair.split("=", 1)
-                params[k] = v
+                params[unquote(k.replace("+", " "))] = unquote(v.replace("+", " "))
     return params
 
 
@@ -63,6 +63,10 @@ class Default(WorkerEntrypoint):
 
         if path == "/api/v1/screener/filter":
             data, status = await screener_filter(params, db)
+            return Response.json(data, status=status)
+
+        if path == "/api/v1/screener/benchmarks":
+            data, status = await screener_benchmarks(qp("sector"), qp("benchmark_type"), db)
             return Response.json(data, status=status)
 
         if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":

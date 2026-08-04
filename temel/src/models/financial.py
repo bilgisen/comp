@@ -48,7 +48,7 @@ class FinancialModel:
 
     async def get_latest_period(self, ticker: str) -> Optional[str]:
         result = await self.db.query(
-            "SELECT period_key FROM company_ratios WHERE ticker = ? ORDER BY computed_at DESC LIMIT 1",
+            "SELECT period_key FROM company_ratios WHERE ticker = ? ORDER BY (period_key = 'TTM') DESC, computed_at DESC LIMIT 1",
             [ticker.upper()]
         )
         return result.first["period_key"] if result.first else None

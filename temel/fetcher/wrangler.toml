@@ -12,10 +12,10 @@ database_id = "60c3d57f-4f31-4514-8f0e-1a3eb10bff0b"
 binding = "TEMEL_CACHE"
 id = "7a12cfad9cae4d46b265f8973361c380"
 
-# Layer 1: Daily 07:00 TR (04:00 UTC) - KAP window companies
+# Layer 1: Every 5 min 07:00-07:55 TR (04:00-04:55 UTC) - cursor-based daily rotation
 # Layer 2: Sunday 04:00 TR (01:00 UTC) - All active companies
 [triggers]
-crons = ["0 4 * * *", "0 1 * * 0"]
+crons = ["*/5 4 * * *", "0 1 * * 7"]
 
 [vars]
 ISYATIRIM_BASE_URL = "https://www.isyatirim.com.tr"

@@ -237,14 +237,20 @@ async def invalidate_cache(cache, ticker):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
+        if request.method.upper() != "POST":
+            return Response.json({"error": "Only POST allowed"}, status=403)
+        return await self._run_batch()
+
+    async def scheduled(self, event):
+        try:
+            await self._run_batch()
+        except Exception as e:
+            print(json.dumps({"msg": "scheduled_error", "error": str(e), "type": type(e).__name__}))
+
+    async def _run_batch(self):
         try:
             db = self.env.TEMEL_DB
             cache = self.env.TEMEL_CACHE
-
-            is_cron = "__scheduled" in request.url if request.url else False
-            is_manual = request.method.upper() == "POST"
-            if not is_cron and not is_manual:
-                return Response.json({"error": "Only cron or POST allowed"}, status=403)
 
             settings = {"ISYATIRIM_BASE_URL": "https://www.isyatirim.com.tr"}
 
@@ -260,7 +266,7 @@ class Default(WorkerEntrypoint):
             from js import fetch as js_fetch
             results = []
             session_start = time.time()
-            max_wall = 110
+            max_wall = 25
             batch_size = 10
 
             for i in range(start, min(start + batch_size, len(ticker_list))):

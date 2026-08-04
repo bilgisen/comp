@@ -6,7 +6,7 @@ from models.financial import FinancialModel
 from models.metrics import MetricsModel
 from services.ratio_calculator import RatioCalculator
 from kv.cache import KVCache
-from routers.mappings import map_financial_group, map_statement_type, RATIO_NAMES
+from routers.mappings import map_financial_group, map_statement_type, RATIO_NAMES, RATIO_CODE_ALIASES
 from services.screener import ScreenerService
 
 
@@ -27,7 +27,7 @@ async def get_company_profile(ticker: str, db: D1Client) -> dict:
     financial_model = FinancialModel(db)
     latest_period = await financial_model.get_latest_period(ticker)
     key_ratios = await financial_model.get_ratios(ticker, latest_period,
-        ["current_ratio", "debt_to_equity", "roe", "net_margin", "pe_ratio"])
+        ["current_ratio", "debt_equity", "roe", "net_margin", "pe", "pb"])
     fg = company.get("financial_group", "XI_29")
     return {
         "ticker": company["ticker"],
@@ -87,6 +87,8 @@ async def get_ratios(ticker: str, period_key: Optional[str], ratio_codes_str: Op
     model = FinancialModel(db)
     if not period_key:
         period_key = await model.get_latest_period(ticker)
+        if ratio_codes:
+            ratio_codes = [RATIO_CODE_ALIASES.get(c.strip(), c.strip()) for c in ratio_codes]
     ratios = await model.get_ratios(ticker, period_key, ratio_codes)
     company_model = CompanyModel(db)
     company = await company_model.get_by_ticker(ticker)
@@ -203,3 +205,32 @@ async def calculate_ratios(ticker: str, period_key: Optional[str], db: D1Client,
 async def screener_filter(params: dict, db: D1Client) -> dict:
     service = ScreenerService(db)
     return await service.filter(params), 200
+
+
+async def screener_benchmarks(sector: Optional[str], benchmark_type: Optional[str], db: D1Client) -> dict:
+    where = ["period_key = 'TTM'"]
+    args = []
+    if sector:
+        where.append("sector_name = ?")
+        args.append(sector)
+    if benchmark_type:
+        where.append("benchmark_type = ?")
+        args.append(benchmark_type)
+    rows = await db.query(
+        "SELECT sector_name, benchmark_type, ratio_code, median_ew, median_mc, p25, p75, n_peers, reliability "
+        "FROM sector_benchmarks WHERE " + " AND ".join(where) + " ORDER BY sector_name, ratio_code",
+        args
+    )
+    sectors_map: dict[str, list[dict]] = {}
+    for r in rows.results:
+        sectors_map.setdefault(r["sector_name"], []).append({
+            "benchmark_type": r["benchmark_type"],
+            "ratio_code": r["ratio_code"],
+            "median_ew": r.get("median_ew"),
+            "median_mc": r.get("median_mc"),
+            "p25": r.get("p25"),
+            "p75": r.get("p75"),
+            "n_peers": r.get("n_peers"),
+            "reliability": r.get("reliability"),
+        })
+    return {"total": len(rows.results), "sectors": sectors_map}, 200

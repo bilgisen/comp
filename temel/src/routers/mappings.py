@@ -37,6 +37,16 @@ RATIO_NAMES = {
     "forward_pe": "İleri F/K",
     "forward_ev_ebitda": "İleri FD/FAVÖK",
     "forward_pb": "İleri PD/DD",
+    "pe": "F/K Oranı",
+    "pb": "PD/DD Oranı",
+    "debt_equity": "Borç/Özkaynak",
+}
+
+# v1 (legacy periyodik) -> v2 (TTM worker) ratio code aliases
+RATIO_CODE_ALIASES = {
+    "pe_ratio": "pe",
+    "pb_ratio": "pb",
+    "debt_to_equity": "debt_equity",
 }
 
 
